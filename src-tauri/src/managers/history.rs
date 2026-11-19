@@ -278,6 +278,13 @@ impl HistoryManager {
     /// Save a new history entry to the database. Voicey never writes
     /// dictation audio to disk, so `file_name` is empty for dictated entries;
     /// file-drop entries pass the name of the user-provided audio file.
+    /// Save a dictation. The columns keep their historical names (the schema
+    /// is stable); their meaning since screen grounding is: the
+    /// post-transcription pass is the grounded rewrite, `post_processed_text`
+    /// holds what the vision model extracted from the screen (D5: history
+    /// keeps text, never pixels), and `post_process_prompt` is always `None`
+    /// (the grounding instruction is built in, not user-configured).
+    #[allow(clippy::too_many_arguments)]
     pub fn save_entry(
         &self,
         file_name: String,

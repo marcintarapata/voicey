@@ -12,7 +12,6 @@
     "general": "General",
     "models": "Models",
     "advanced": "Advanced",
-    "postProcessing": "Post Process",
     "history": "History",
     "debug": "Debug",
     "about": "About"
@@ -142,10 +141,6 @@
           "cancel": {
             "name": "Cancel Shortcut",
             "description": "The keyboard shortcut to cancel the current recording."
-          },
-          "transcribe_with_post_process": {
-            "name": "Post-Processing Hotkey",
-            "description": "Optional: A dedicated hotkey that always applies AI post-processing to your transcription."
           }
         },
         "errors": {
@@ -425,69 +420,6 @@
         }
       }
     },
-    "postProcessing": {
-      "hotkey": {
-        "title": "Hotkey"
-      },
-      "api": {
-        "title": "API",
-        "provider": {
-          "title": "Provider",
-          "description": "Select an OpenAI-compatible or Anthropic-compatible provider."
-        },
-        "apiFormat": {
-          "title": "API Format",
-          "description": "Request format expected by your custom endpoint.",
-          "options": {
-            "openai": "OpenAI Compatible (Chat Completions)",
-            "anthropic": "Anthropic Messages"
-          }
-        },
-        "appleIntelligence": {
-          "unavailable": "Apple Intelligence is not available on this device. Requires an Apple Silicon Mac running macOS Tahoe (26.0) or later with Apple Intelligence enabled in System Settings."
-        },
-        "baseUrl": {
-          "title": "Base URL",
-          "description": "API base URL for the selected provider. Only the custom provider can be edited.",
-          "placeholder": "https://api.openai.com/v1",
-          "placeholderAnthropic": "https://api.anthropic.com/v1"
-        },
-        "apiKey": {
-          "title": "API Key",
-          "description": "API key for the selected provider.",
-          "placeholder": "sk-..."
-        },
-        "model": {
-          "title": "Model",
-          "descriptionCustom": "Provide the model identifier expected by your custom endpoint.",
-          "descriptionDefault": "Choose a model exposed by the selected provider.",
-          "placeholderWithOptions": "Search or select a model",
-          "placeholderNoOptions": "Type a model name",
-          "refreshModels": "Refresh models"
-        }
-      },
-      "prompts": {
-        "title": "Prompt",
-        "selectedPrompt": {
-          "title": "Selected Prompt",
-          "description": "Select a template for refining transcriptions or create a new one. Use ${output} inside the prompt text to reference the captured transcript."
-        },
-        "noPrompts": "No prompts available",
-        "selectPrompt": "Select a prompt",
-        "createNew": "Create New Prompt",
-        "promptLabel": "Prompt Label",
-        "promptLabelPlaceholder": "Enter prompt name",
-        "promptInstructions": "Prompt Instructions",
-        "promptInstructionsPlaceholder": "Write the instructions to run after transcription. Example: Improve grammar and clarity for the following text: ${output}",
-        "promptTip": "Tip: Use <code>${output}</code> to insert the transcribed text in your prompt.",
-        "updatePrompt": "Update Prompt",
-        "deletePrompt": "Delete Prompt",
-        "createPrompt": "Create Prompt",
-        "cancel": "Cancel",
-        "selectToEdit": "Select a prompt above to view and edit its details.",
-        "createFirst": "Click 'Create New Prompt' above to create your first post-processing prompt."
-      }
-    },
     "history": {
       "title": "History",
       "openFolder": "Open Recordings Folder",
@@ -567,10 +499,6 @@
       "clamshellMicrophone": {
         "title": "Clamshell Microphone",
         "description": "Microphone to use when laptop lid is closed"
-      },
-      "postProcessingToggle": {
-        "label": "Post Processing",
-        "description": "Enable AI-powered text refinement after transcription"
       },
       "muteWhileRecording": {
         "label": "Mute While Recording",
@@ -704,12 +632,10 @@
     "pasteFailed": "Text could not be pasted into the active application.",
     "pasteBlockedElevatedTitle": "Can't Paste into Admin Apps",
     "pasteBlockedElevated": "The active application is running as administrator, so Voicey can't paste into it. You can copy the transcript from History.",
-    "postProcessFailedTitle": "Pasted Without Post-Processing",
-    "postProcessFailed": "Post Process didn't finish, so the transcript was pasted as is.",
-    "filePostProcessFailedTitle": "Transcribed Without Post-Processing",
-    "filePostProcessFailed": "Post Process didn't finish, so the transcript was saved as is.",
     "fileTranscriptionFailedTitle": "File Transcription Failed",
-    "transcriptionFailedTitle": "Transcription Failed"
+    "transcriptionFailedTitle": "Transcription Failed",
+    "groundingFailedTitle": "Pasted Without Screen Grounding",
+    "groundingFailed": "The screen pass didn't finish, so the transcript was pasted as is."
   },
   "notices": {
     "errorOne": "{{n}} error",
@@ -725,7 +651,8 @@
   "overlay": {
     "transcribing": "Transcribing...",
     "processing": "Processing...",
-    "loadingModel": "Loading model..."
+    "loadingModel": "Loading model...",
+    "grounding": "Resolving…"
   },
   "secureInput": {
     "blockedWithCulprit_one": "{{name}} may be blocking 1 shortcut",
@@ -770,7 +697,7 @@
   },
   "firstRun": {
     "title": "Set up Voicey",
-    "subtitle": "One model download and a working microphone — nothing else to configure.",
+    "subtitle": "Two model downloads and a working microphone — nothing else to configure.",
     "micTitle": "Microphone",
     "micReady": "Microphone access is allowed.",
     "micWillPrompt": "Your system will ask for microphone access the first time you dictate.",
@@ -781,6 +708,10 @@
     "modelReady": "Parakeet is downloaded and ready.",
     "modelDescription": "Voicey dictates with one model: Parakeet. It downloads once (about 740 MB) and never leaves this computer.",
     "downloadFailed": "The download didn't finish. Check your connection and try again.",
-    "retryDownload": "Retry download"
+    "retryDownload": "Retry download",
+    "visionModelTitle": "Vision model",
+    "visionModelReady": "The screen vision model is downloaded and ready.",
+    "visionModelDescription": "A second shortcut can also read your screen: it captures one frame and resolves what you pointed at, on this computer. It downloads once (about 3.1 GB) and never leaves this computer.",
+    "visionDownloadFailed": "The vision model download didn't finish. Check your connection and try again."
   }
 }

@@ -48,9 +48,10 @@ pub enum NoticeCode {
     RecordingFailed,
     ModelLoadFailed,
     NoModelSelected,
-    PostProcessFailed,
+    /// The grounded dictation got its transcript, but the screen pass failed
+    /// (capture or vision model), so the verbatim text was pasted instead.
+    GroundingFailed,
     FileTranscriptionFailed,
-    FilePostProcessFailed,
 }
 
 impl NoticeCode {
@@ -66,7 +67,7 @@ impl NoticeCode {
             | Self::ModelLoadFailed
             | Self::NoModelSelected
             | Self::FileTranscriptionFailed => NoticeLevel::Error,
-            Self::PostProcessFailed | Self::FilePostProcessFailed => NoticeLevel::Warning,
+            Self::GroundingFailed => NoticeLevel::Warning,
         }
     }
 
@@ -82,9 +83,8 @@ impl NoticeCode {
             Self::RecordingFailed => &strings.recording_failed_title,
             Self::ModelLoadFailed => &strings.model_load_failed_title,
             Self::NoModelSelected => &strings.no_model_selected_title,
-            Self::PostProcessFailed => &strings.post_process_failed_title,
+            Self::GroundingFailed => &strings.grounding_failed_title,
             Self::FileTranscriptionFailed => &strings.file_transcription_failed_title,
-            Self::FilePostProcessFailed => &strings.file_post_process_failed_title,
         }
     }
 }
@@ -250,12 +250,12 @@ mod tests {
         let mut active = Vec::new();
         insert(&mut active, dictation(NoticeCode::PasteFailed));
         insert(&mut active, file(NoticeCode::FileTranscriptionFailed));
-        insert(&mut active, dictation(NoticeCode::PostProcessFailed));
+        insert(&mut active, dictation(NoticeCode::GroundingFailed));
 
         assert_eq!(
             active,
             vec![
-                dictation(NoticeCode::PostProcessFailed),
+                dictation(NoticeCode::GroundingFailed),
                 file(NoticeCode::FileTranscriptionFailed),
             ]
         );
@@ -279,7 +279,7 @@ mod tests {
     fn dismissing_spares_a_newer_notice_from_the_same_source() {
         let mut active = vec![dictation(NoticeCode::PasteFailed)];
 
-        let stale = Some(NoticeCode::PostProcessFailed);
+        let stale = Some(NoticeCode::GroundingFailed);
         assert!(!remove(&mut active, NoticeSource::Dictation, stale));
         assert_eq!(active, vec![dictation(NoticeCode::PasteFailed)]);
 
@@ -294,7 +294,7 @@ mod tests {
         assert_eq!(headline(&active), None);
 
         insert(&mut active, file(NoticeCode::FileTranscriptionFailed));
-        insert(&mut active, dictation(NoticeCode::PostProcessFailed));
+        insert(&mut active, dictation(NoticeCode::GroundingFailed));
         assert_eq!(
             headline(&active),
             Some(&file(NoticeCode::FileTranscriptionFailed))

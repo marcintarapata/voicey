@@ -171,6 +171,43 @@ impl ModelManager {
         Ok(())
     }
 
+    /// [`Self::verify_file_with_events`] wired to the Tauri event bus, for
+    /// downloads orchestrated outside the HTTP transport (the screen-grounding
+    /// vision model's Hugging Face fetches). Emits the verification events
+    /// the UI already knows, under `model_id`.
+    ///
+    /// On mismatch `verify_sha256` deletes the snapshot pointer; the caller
+    /// removes the backing blob (LFS blobs are named by their sha256), so a
+    /// retry fetches fresh bytes instead of re-linking a corrupt blob.
+    pub(super) async fn verify_hf_cached_file(
+        app_handle: &tauri::AppHandle,
+        model_id: &str,
+        path: &Path,
+        expected_sha256: &str,
+    ) -> Result<()> {
+        let result =
+            Self::verify_file_with_events(model_id, path, Some(expected_sha256), &|event| {
+                let _ = match event {
+                    HttpDownloadEvent::VerificationStarted => {
+                        app_handle.emit("model-verification-started", model_id)
+                    }
+                    HttpDownloadEvent::VerificationCompleted => {
+                        app_handle.emit("model-verification-completed", model_id)
+                    }
+                    HttpDownloadEvent::Progress(_) => Ok(()),
+                };
+            })
+            .await;
+        if result.is_err() {
+            // LFS blobs are keyed by their sha256 — the expected hash names
+            // the exact blob that failed.
+            if let Some(blobs) = path.ancestors().nth(3).map(|repo| repo.join("blobs")) {
+                let _ = fs::remove_file(blobs.join(expected_sha256));
+            }
+        }
+        result
+    }
+
     /// [`Self::download_http_resumable_with_events`] wired to the Tauri event
     /// bus — the production entry point.
     pub(super) async fn download_http_resumable(

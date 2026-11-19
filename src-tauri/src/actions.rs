@@ -1,20 +1,20 @@
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
 use crate::audio_toolkit::VadPolicy;
 use crate::managers::audio::{recording_notice_code, AudioRecordingManager};
 use crate::managers::history::HistoryManager;
-use crate::managers::model::ModelManager;
+use crate::managers::model::{ModelManager, SCREEN_VLM_ID};
 use crate::managers::transcription::policy::{live_decode, LiveDecode, ModelTraits};
 use crate::managers::transcription::StreamWorkKind;
 use crate::managers::transcription::{Transcription, TranscriptionManager};
 use crate::notices::{self, Notice, NoticeCode, NoticeSource};
-use crate::settings::{get_settings, AppSettings, OverlayStyle, APPLE_INTELLIGENCE_PROVIDER_ID};
+use crate::screen_capture::{self, ScreenFrame};
+use crate::settings::{get_settings, OverlayStyle};
 use crate::shortcut;
 use crate::tray::{set_tray_state, TrayIconState};
 use crate::utils::{
-    self, show_processing_overlay, show_recording_overlay, show_transcribing_overlay,
+    self, show_grounding_overlay, show_recording_overlay, show_transcribing_overlay,
 };
+use crate::vlm_supervisor::{VlmLoadSpec, VlmSupervisor};
 use crate::TranscriptionCoordinator;
 use log::{debug, error, warn};
 use once_cell::sync::Lazy;
@@ -100,11 +100,6 @@ fn finish_without_text(
 
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
-/// Deadline for the whole post-processing step, retries included. The HTTP
-/// client only bounds connecting, so an endpoint that accepts the request and
-/// never answers would otherwise hold the dictation until a proxy gives up.
-const POST_PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
-
 /// Bumped per recording session, so a late paste from an earlier session
 /// doesn't reset the tray or hide the overlay of a newer one.
 static RECORDING_SESSION: AtomicU64 = AtomicU64::new(0);
@@ -133,54 +128,17 @@ pub trait ShortcutAction: Send + Sync {
 
 // Transcribe Action
 struct TranscribeAction {
-    post_process: bool,
+    /// The grounded binding: also capture one frame of the screen at stop and
+    /// resolve what the transcript points at through the local vision model
+    /// (D6). The verbatim binding stays zero-latency and untouched.
+    grounded: bool,
 }
 
-/// Field name for structured output JSON schema
-const TRANSCRIPTION_FIELD: &str = "transcription";
-
-/// Strip invisible Unicode characters that some LLMs may insert
-fn strip_invisible_chars(s: &str) -> String {
-    s.replace(['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}'], "")
-}
-
-/// Strip a leading `<think>...</think>` block. Some endpoints can't disable
-/// reasoning, and some local servers put the reasoning text into `content`
-/// instead of a separate field — without this the user would get the model's
-/// chain of thought pasted along with the cleaned transcription.
-fn strip_think_block(s: &str) -> &str {
-    if let Some(rest) = s.trim_start().strip_prefix("<think>") {
-        if let Some(end) = rest.find("</think>") {
-            return rest[end + "</think>".len()..].trim_start();
-        }
-    }
-    s
-}
-
-/// Build a system prompt from the user's prompt template.
-/// Removes `${output}` placeholder since the transcription is sent as the user message.
-fn build_system_prompt(prompt_template: &str) -> String {
-    prompt_template.replace("${output}", "").trim().to_string()
-}
-
-/// Returns `true` when a transcription has no meaningful content to
-/// post-process (empty or whitespace-only). Used to skip the post-processing
-/// LLM call when nothing was actually transcribed, which would otherwise make
-/// the model reply with an error message such as "you need to provide the
-/// transcription".
+/// Returns `true` when a transcription has no meaningful content to ground
+/// (empty or whitespace-only): nothing was said, so there is nothing for the
+/// screen pass to resolve and the dictation ends as a verbatim one would.
 fn is_blank_transcription(transcription: &str) -> bool {
     transcription.trim().is_empty()
-}
-
-fn non_blank_post_processed_text(text: String) -> Option<String> {
-    if is_blank_transcription(&text) {
-        warn!(
-            "Post-processing returned an empty response. Falling back to original transcription."
-        );
-        None
-    } else {
-        Some(text)
-    }
 }
 
 async fn complete_unless_cancelled<F, C>(operation: F, is_cancelled: C) -> Option<F::Output>
@@ -207,310 +165,113 @@ fn should_use_streaming_overlay(style: OverlayStyle, is_streaming: bool) -> bool
     style == OverlayStyle::Live && is_streaming
 }
 
-/// What became of a transcription's post-processing.
+/// A reply that's blank once trimmed is no better than none: the verbatim
+/// transcript goes out instead.
+fn non_blank_grounded_text(text: String) -> Option<String> {
+    if text.trim().is_empty() {
+        warn!("Grounding returned an empty response; pasting the original transcript");
+        None
+    } else {
+        Some(text)
+    }
+}
+
+/// What became of the grounded pass for one dictation.
 #[derive(Debug, PartialEq, Eq)]
-enum PostProcessOutcome {
-    /// There was no speech to process.
-    Skipped,
+enum GroundingOutcome {
+    /// The pass ran and produced a rewrite.
     Done(String),
-    /// The user asked for it, but it couldn't run or produced nothing, so the
-    /// transcript goes out as it is.
+    /// The pass was asked for but couldn't run or produced nothing, so the
+    /// verbatim transcript goes out and a warning notice explains.
     Failed,
 }
 
-async fn post_process_transcription(
-    settings: &AppSettings,
-    transcription: &str,
-) -> PostProcessOutcome {
-    if is_blank_transcription(transcription) {
-        debug!("Post-processing skipped because the transcription is empty");
-        return PostProcessOutcome::Skipped;
-    }
-
-    let provider = match settings.active_post_process_provider().cloned() {
-        Some(provider) => provider,
-        None => {
-            debug!("Post-processing enabled but no provider is selected");
-            return PostProcessOutcome::Failed;
-        }
-    };
-
-    let model = settings
-        .post_process_models
-        .get(&provider.id)
-        .cloned()
-        .unwrap_or_default();
-
-    if model.trim().is_empty() {
-        debug!(
-            "Post-processing skipped because provider '{}' has no model configured",
-            provider.id
-        );
-        return PostProcessOutcome::Failed;
-    }
-
-    let selected_prompt_id = match &settings.post_process_selected_prompt_id {
-        Some(id) => id.clone(),
-        None => {
-            debug!("Post-processing skipped because no prompt is selected");
-            return PostProcessOutcome::Failed;
-        }
-    };
-
-    let prompt = match settings
-        .post_process_prompts
-        .iter()
-        .find(|prompt| prompt.id == selected_prompt_id)
-    {
-        Some(prompt) => prompt.prompt.clone(),
-        None => {
-            debug!(
-                "Post-processing skipped because prompt '{}' was not found",
-                selected_prompt_id
-            );
-            return PostProcessOutcome::Failed;
-        }
-    };
-
-    if prompt.trim().is_empty() {
-        debug!("Post-processing skipped because the selected prompt is empty");
-        return PostProcessOutcome::Failed;
-    }
-
-    debug!(
-        "Starting LLM post-processing with provider '{}' (model: {})",
-        provider.id, model
-    );
-
-    let api_key = settings
-        .post_process_api_keys
-        .get(&provider.id)
-        .cloned()
-        .unwrap_or_default();
-
-    // Ask these providers to skip reasoning/thinking — post-processing rarely
-    // benefits from it and it adds seconds of latency. llm_client picks the
-    // field the endpoint understands and retries without it if rejected.
-    let disable_reasoning = matches!(provider.id.as_str(), "custom" | "openrouter");
-
-    if provider.supports_structured_output {
-        debug!("Using structured outputs for provider '{}'", provider.id);
-
-        let system_prompt = build_system_prompt(&prompt);
-        let user_content = transcription.to_string();
-
-        // Handle Apple Intelligence separately since it uses native Swift APIs
-        if provider.id == APPLE_INTELLIGENCE_PROVIDER_ID {
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            {
-                if !apple_intelligence::check_apple_intelligence_availability() {
-                    debug!(
-                        "Apple Intelligence selected but not currently available on this device"
-                    );
-                    return PostProcessOutcome::Failed;
-                }
-
-                let token_limit = model.trim().parse::<i32>().unwrap_or(0);
-                return match apple_intelligence::process_text_with_system_prompt(
-                    &system_prompt,
-                    &user_content,
-                    token_limit,
-                ) {
-                    Ok(result) => {
-                        if result.trim().is_empty() {
-                            debug!("Apple Intelligence returned an empty response");
-                            PostProcessOutcome::Failed
-                        } else {
-                            let result = strip_invisible_chars(&result);
-                            debug!(
-                                "Apple Intelligence post-processing succeeded. Output length: {} chars",
-                                result.len()
-                            );
-                            PostProcessOutcome::Done(result)
-                        }
-                    }
-                    Err(err) => {
-                        error!("Apple Intelligence post-processing failed: {}", err);
-                        PostProcessOutcome::Failed
-                    }
-                };
-            }
-
-            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-            {
-                debug!("Apple Intelligence provider selected on unsupported platform");
-                return PostProcessOutcome::Failed;
-            }
-        }
-
-        // Define JSON schema for transcription output
-        let json_schema = serde_json::json!({
-            "type": "object",
-            "properties": {
-                (TRANSCRIPTION_FIELD): {
-                    "type": "string",
-                    "description": "The cleaned and processed transcription text"
-                }
-            },
-            "required": [TRANSCRIPTION_FIELD],
-            "additionalProperties": false
-        });
-
-        match crate::llm_client::send_chat_completion_with_schema(
-            &provider,
-            api_key.clone(),
-            &model,
-            user_content,
-            Some(system_prompt),
-            Some(json_schema),
-            disable_reasoning,
-        )
-        .await
-        {
-            Ok(Some(content)) => {
-                // Parse the JSON response to extract the transcription field
-                let content = strip_think_block(&content);
-                match serde_json::from_str::<serde_json::Value>(content) {
-                    Ok(json) => {
-                        if let Some(transcription_value) =
-                            json.get(TRANSCRIPTION_FIELD).and_then(|t| t.as_str())
-                        {
-                            let result = strip_invisible_chars(transcription_value);
-                            debug!(
-                                "Structured output post-processing succeeded for provider '{}'. Output length: {} chars",
-                                provider.id,
-                                result.len()
-                            );
-                            return PostProcessOutcome::Done(result);
-                        } else {
-                            error!("Structured output response missing 'transcription' field");
-                            return PostProcessOutcome::Done(strip_invisible_chars(content));
-                        }
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to parse structured output JSON: {}. Returning raw content.",
-                            e
-                        );
-                        return PostProcessOutcome::Done(strip_invisible_chars(content));
-                    }
-                }
-            }
-            Ok(None) => {
-                error!("LLM API response has no content");
-                return PostProcessOutcome::Failed;
-            }
-            Err(e) => {
-                warn!(
-                    "Structured output failed for provider '{}': {}. Falling back to legacy mode.",
-                    provider.id, e
-                );
-                // Fall through to legacy mode below
-            }
-        }
-    }
-
-    // Legacy mode: Replace ${output} variable in the prompt with the actual text
-    let processed_prompt = prompt.replace("${output}", transcription);
-    debug!("Processed prompt length: {} chars", processed_prompt.len());
-
-    match crate::llm_client::send_chat_completion(
-        &provider,
-        api_key,
-        &model,
-        processed_prompt,
-        disable_reasoning,
-    )
-    .await
-    {
-        Ok(Some(content)) => {
-            let content = strip_invisible_chars(strip_think_block(&content));
-            debug!(
-                "LLM post-processing succeeded for provider '{}'. Output length: {} chars",
-                provider.id,
-                content.len()
-            );
-            PostProcessOutcome::Done(content)
-        }
-        Ok(None) => {
-            error!("LLM API response has no content");
-            PostProcessOutcome::Failed
-        }
-        Err(e) => {
-            error!(
-                "LLM post-processing failed for provider '{}': {}. Falling back to original transcription.",
-                provider.id,
-                e
-            );
-            PostProcessOutcome::Failed
-        }
-    }
-}
-
-pub(crate) struct ProcessedTranscription {
-    pub final_text: String,
-    pub post_processed_text: Option<String>,
-    pub post_process_prompt: Option<String>,
-    /// `final_text` is the bare transcript because post-processing failed.
-    pub post_process_failed: bool,
-}
-
-pub(crate) async fn process_transcription_output(
+/// Resolve a transcript's on-screen references against the frame with the
+/// local vision model (D6). In memory only; the frame is dropped by the time
+/// this returns and nothing about it is ever stored.
+///
+/// `None` only when cancelled. Runs the model files' download (rare: first
+/// run fetches them up front, so this only fires when files were deleted),
+/// the model load and the grounding itself, each cancellable like the rest
+/// of the pipeline. The blocking supervisor calls run on the blocking pool
+/// so they never stall the async runtime.
+async fn ground_transcription(
     app: &AppHandle,
+    frame: &ScreenFrame,
     transcription: &str,
-    post_process: bool,
-) -> ProcessedTranscription {
-    let settings = get_settings(app);
-    let mut final_text = transcription.to_string();
-    let mut post_processed_text: Option<String> = None;
-    let mut post_process_prompt: Option<String> = None;
-    let mut post_process_failed = false;
+    is_cancelled: impl Fn() -> bool + Send + Sync + 'static,
+) -> Option<GroundingOutcome> {
+    if is_blank_transcription(transcription) {
+        // Nothing was said: behave exactly like the verbatim binding.
+        return Some(GroundingOutcome::Done(transcription.to_string()));
+    }
 
-    if post_process {
-        // A reply that's blank once cleaned is no better than none.
-        let outcome = match tokio::time::timeout(
-            POST_PROCESS_TIMEOUT,
-            post_process_transcription(&settings, &final_text),
-        )
-        .await
-        {
-            Ok(PostProcessOutcome::Done(text)) => non_blank_post_processed_text(text)
-                .map_or(PostProcessOutcome::Failed, PostProcessOutcome::Done),
-            Ok(outcome) => outcome,
-            Err(_) => {
-                warn!(
-                    "Post-processing timed out after {:?}; pasting the original transcription",
-                    POST_PROCESS_TIMEOUT
-                );
-                PostProcessOutcome::Failed
-            }
-        };
-        match outcome {
-            PostProcessOutcome::Skipped => {}
-            PostProcessOutcome::Failed => post_process_failed = true,
-            PostProcessOutcome::Done(processed_text) => {
-                post_processed_text = Some(processed_text.clone());
-                final_text = processed_text;
-
-                if let Some(prompt_id) = &settings.post_process_selected_prompt_id {
-                    if let Some(prompt) = settings
-                        .post_process_prompts
-                        .iter()
-                        .find(|prompt| &prompt.id == prompt_id)
-                    {
-                        post_process_prompt = Some(prompt.prompt.clone());
+    // The pinned files, downloading them if they are missing (a deleted
+    // file, an interrupted first-run download). The overlay keeps its
+    // working state; the settings window, if open, tracks the same
+    // `model-download-*` events under `SCREEN_VLM_ID`.
+    let (model_path, mmproj_path) = {
+        let model_manager = app.state::<Arc<ModelManager>>();
+        match model_manager.screen_vlm_paths() {
+            Some(paths) => paths,
+            None => {
+                debug!("The screen vision model is missing; downloading it");
+                let manager = model_manager.inner().clone();
+                match complete_unless_cancelled(
+                    async move { manager.download_screen_vlm().await },
+                    &is_cancelled,
+                )
+                .await
+                {
+                    None => return None,
+                    Some(Err(e)) => {
+                        error!("Could not download '{}': {:#}", SCREEN_VLM_ID, e);
+                        return Some(GroundingOutcome::Failed);
+                    }
+                    Some(Ok(())) => {}
+                }
+                match app.state::<Arc<ModelManager>>().screen_vlm_paths() {
+                    Some(paths) => paths,
+                    None => {
+                        error!(
+                            "'{}' finished downloading but its files are missing",
+                            SCREEN_VLM_ID
+                        );
+                        return Some(GroundingOutcome::Failed);
                     }
                 }
             }
         }
-    }
+    };
 
-    ProcessedTranscription {
-        final_text,
-        post_processed_text,
-        post_process_prompt,
-        post_process_failed,
-    }
+    // The load and the grounding block on the worker's answer; the
+    // supervisor's own deadlines bound both.
+    let vlm = app.state::<VlmSupervisor>().inner().clone();
+    let mark = vlm.cancel_mark();
+    let spec = VlmLoadSpec {
+        model_path,
+        mmproj_path,
+        gpu: true,
+    };
+    let transcript = transcription.to_string();
+    let frame = frame.clone();
+    let ground = tokio::task::spawn_blocking(move || {
+        vlm.load(spec)?;
+        vlm.ground(mark, &frame, transcript)
+    });
+    let grounded = match complete_unless_cancelled(ground, &is_cancelled).await {
+        None => return None,
+        Some(Ok(Ok(text))) => text,
+        Some(Ok(Err(e))) => {
+            error!("Screen grounding failed: {e}");
+            return Some(GroundingOutcome::Failed);
+        }
+        Some(Err(e)) => {
+            error!("Screen grounding task failed: {e}");
+            return Some(GroundingOutcome::Failed);
+        }
+    };
+    Some(non_blank_grounded_text(grounded).map_or(GroundingOutcome::Failed, GroundingOutcome::Done))
 }
 
 impl ShortcutAction for TranscribeAction {
@@ -736,7 +497,7 @@ impl ShortcutAction for TranscribeAction {
         play_feedback_sound(app, SoundType::Stop);
 
         let binding_id = binding_id.to_string(); // Clone binding_id for the async task
-        let post_process = self.post_process;
+        let grounded = self.grounded;
         let cancel_generation = rm.cancel_generation();
 
         tauri::async_runtime::spawn(async move {
@@ -745,6 +506,22 @@ impl ShortcutAction for TranscribeAction {
                 "Starting async transcription task for binding: {}",
                 binding_id
             );
+
+            // D4: the grounded binding grabs exactly one frame of the screen
+            // at release — the screen the words referred to — before anything
+            // else happens. In memory only; a capture failure degrades the
+            // dictation to verbatim with a notice, never blocks it.
+            let frame = if grounded {
+                match screen_capture::capture_primary_display() {
+                    Ok(frame) => Some(frame),
+                    Err(e) => {
+                        warn!("Screen capture failed: {e}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
             let stop_recording_time = Instant::now();
             if let Some(samples) = rm.stop_recording(&binding_id, cancel_generation) {
@@ -796,23 +573,48 @@ impl ShortcutAction for TranscribeAction {
                                 utils::redact_text(&transcription)
                             );
 
-                            if post_process {
+                            // The grounded pass: one frame plus the transcript
+                            // through the local vision model (D6). The verbatim
+                            // binding skips straight past it.
+                            let grounding = if grounded {
                                 if use_streaming_overlay {
-                                    tm.emit_stream_working(StreamWorkKind::Polishing);
+                                    tm.emit_stream_working(StreamWorkKind::Grounding);
                                 } else {
-                                    show_processing_overlay(&ah);
+                                    show_grounding_overlay(&ah);
                                 }
-                            }
-                            let Some(processed) = complete_unless_cancelled(
-                                process_transcription_output(&ah, &transcription, post_process),
-                                || rm.was_cancelled_since(cancel_generation),
-                            )
-                            .await
-                            else {
-                                debug!("Transcription operation cancelled during output handling");
-                                utils::hide_recording_overlay(&ah);
-                                set_tray_state(&ah, TrayIconState::Idle);
-                                return;
+                                let outcome = match frame.as_ref() {
+                                    // Capture already failed at release; say
+                                    // so now, once there is something to paste.
+                                    None => GroundingOutcome::Failed,
+                                    Some(frame) => {
+                                        let rm_for_ground = Arc::clone(&rm);
+                                        match ground_transcription(
+                                            &ah,
+                                            frame,
+                                            &transcription,
+                                            move || {
+                                                rm_for_ground.was_cancelled_since(cancel_generation)
+                                            },
+                                        )
+                                        .await
+                                        {
+                                            Some(outcome) => outcome,
+                                            // Cancelled: the whole pipeline is
+                                            // unwinding.
+                                            None => {
+                                                debug!(
+                                                    "Transcription operation cancelled during grounding"
+                                                );
+                                                utils::hide_recording_overlay(&ah);
+                                                set_tray_state(&ah, TrayIconState::Idle);
+                                                return;
+                                            }
+                                        }
+                                    }
+                                };
+                                Some(outcome)
+                            } else {
+                                None
                             };
 
                             if rm.was_cancelled_since(cancel_generation) {
@@ -822,14 +624,32 @@ impl ShortcutAction for TranscribeAction {
                                 return;
                             }
 
+                            // What the dictation produced: the grounded rewrite
+                            // when the pass succeeded, the verbatim transcript
+                            // otherwise. `grounded_text` is what the pass
+                            // extracted (kept by history, D5: text, never
+                            // pixels); `grounding_failed` drives the warning
+                            // notice that replaces the overlay after the paste.
+                            let (final_text, grounded_text, grounding_failed) = match &grounding {
+                                Some(GroundingOutcome::Done(grounded)) => {
+                                    (grounded.clone(), Some(grounded.clone()), false)
+                                }
+                                Some(GroundingOutcome::Failed) => {
+                                    (transcription.clone(), None, true)
+                                }
+                                None => (transcription.clone(), None, false),
+                            };
+
                             // Save the transcript to history. Voicey keeps no
-                            // audio, so the entry has no recording to point at.
+                            // audio, so the entry has no recording to point at;
+                            // the grounded text is kept alongside the verbatim
+                            // one (D5: history keeps text, never pixels).
                             if let Err(err) = hm.save_entry(
                                 String::new(),
                                 transcription,
-                                post_process,
-                                processed.post_processed_text.clone(),
-                                processed.post_process_prompt.clone(),
+                                grounded,
+                                grounded_text,
+                                None,
                                 language,
                             ) {
                                 error!("Failed to save history entry: {}", err);
@@ -838,7 +658,7 @@ impl ShortcutAction for TranscribeAction {
                             // The user's hook only changes what gets pasted;
                             // history above keeps the text as produced.
                             let Some(final_text) = complete_unless_cancelled(
-                                crate::transcription_hook::apply(&ah, processed.final_text),
+                                crate::transcription_hook::apply(&ah, final_text),
                                 || rm.was_cancelled_since(cancel_generation),
                             )
                             .await
@@ -854,7 +674,6 @@ impl ShortcutAction for TranscribeAction {
                             } else {
                                 let ah_clone = ah.clone();
                                 let paste_time = Instant::now();
-                                let post_process_failed = processed.post_process_failed;
                                 let rm_for_paste = Arc::clone(&rm);
                                 // Taken before the paste thread exists, and so
                                 // before the next session can start.
@@ -891,9 +710,9 @@ impl ShortcutAction for TranscribeAction {
                                                             NoticeSource::Dictation,
                                                         );
                                                     }
-                                                    let notice = post_process_failed.then(|| {
+                                                    let notice = grounding_failed.then(|| {
                                                         Notice::new(
-                                                            NoticeCode::PostProcessFailed,
+                                                            NoticeCode::GroundingFailed,
                                                             NoticeSource::Dictation,
                                                         )
                                                     });
@@ -977,7 +796,7 @@ impl ShortcutAction for TranscribeAction {
                             if let Err(save_err) = hm.save_entry(
                                 String::new(),
                                 String::new(),
-                                post_process,
+                                grounded,
                                 None,
                                 None,
                                 None,
@@ -1054,13 +873,11 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
     let mut map = HashMap::new();
     map.insert(
         "transcribe".to_string(),
-        Arc::new(TranscribeAction {
-            post_process: false,
-        }) as Arc<dyn ShortcutAction>,
+        Arc::new(TranscribeAction { grounded: false }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
-        "transcribe_with_post_process".to_string(),
-        Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
+        "transcribe_grounded".to_string(),
+        Arc::new(TranscribeAction { grounded: true }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
         "cancel".to_string(),
@@ -1076,93 +893,15 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        complete_unless_cancelled, is_blank_transcription, non_blank_post_processed_text,
-        post_process_transcription, should_use_streaming_overlay, strip_invisible_chars,
-        strip_think_block, PostProcessOutcome,
+        complete_unless_cancelled, is_blank_transcription, non_blank_grounded_text,
+        should_use_streaming_overlay,
     };
-    use crate::settings::{get_default_settings, AppSettings, OverlayStyle};
+    use crate::settings::OverlayStyle;
     use std::future;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
-
-    /// Settings that run unstructured post-processing against `base_url`.
-    fn post_process_settings(base_url: &str) -> AppSettings {
-        let mut settings = get_default_settings();
-        let provider = settings
-            .post_process_providers
-            .iter_mut()
-            .find(|provider| provider.id == settings.post_process_provider_id)
-            .expect("the default provider exists");
-        provider.base_url = base_url.to_string();
-        provider.supports_structured_output = false;
-        let provider_id = provider.id.clone();
-        settings
-            .post_process_models
-            .insert(provider_id, "model".to_string());
-        settings.post_process_selected_prompt_id =
-            settings.post_process_prompts.first().map(|p| p.id.clone());
-        settings
-    }
-
-    /// Answers one chat completion request with `body`, and returns its URL.
-    fn serve_once(body: &'static str) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0; 8192];
-            let _ = stream.read(&mut request);
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream.write_all(response.as_bytes()).unwrap();
-        });
-        format!("http://{address}")
-    }
-
-    fn run_post_process(settings: &AppSettings, transcription: &str) -> PostProcessOutcome {
-        tauri::async_runtime::block_on(post_process_transcription(settings, transcription))
-    }
-
-    #[test]
-    fn blank_speech_is_skipped_but_missing_setup_failed() {
-        let settings = post_process_settings("http://127.0.0.1:1");
-        assert_eq!(
-            run_post_process(&settings, "  "),
-            PostProcessOutcome::Skipped
-        );
-
-        let mut settings = post_process_settings("http://127.0.0.1:1");
-        settings.post_process_models.clear();
-        assert_eq!(
-            run_post_process(&settings, "hello"),
-            PostProcessOutcome::Failed
-        );
-    }
-
-    #[test]
-    fn a_post_processing_reply_is_done() {
-        let url = serve_once(r#"{"choices":[{"message":{"content":"polished"}}]}"#);
-        assert_eq!(
-            run_post_process(&post_process_settings(&url), "hello"),
-            PostProcessOutcome::Done("polished".to_string())
-        );
-    }
-
-    #[test]
-    fn a_post_processing_reply_with_no_content_failed() {
-        let url = serve_once(r#"{"choices":[]}"#);
-        assert_eq!(
-            run_post_process(&post_process_settings(&url), "hello"),
-            PostProcessOutcome::Failed
-        );
-    }
 
     #[test]
     fn blank_transcription_is_detected() {
@@ -1178,29 +917,17 @@ mod tests {
     }
 
     #[test]
-    fn blank_post_processed_text_is_rejected() {
+    fn blank_grounded_text_is_rejected() {
         for text in ["", "   ", "\t\n\r\n", "\u{00A0}\u{2003}"] {
-            assert_eq!(non_blank_post_processed_text(text.to_string()), None);
+            assert_eq!(non_blank_grounded_text(text.to_string()), None);
         }
     }
 
     #[test]
-    fn cleaned_empty_post_processed_text_is_rejected() {
-        for text in [
-            "\u{200B}\u{200C}\u{200D}\u{FEFF}",
-            "<think>reasoning only</think>",
-            "<think>reasoning only</think>\n\u{200B} ",
-        ] {
-            let text = strip_invisible_chars(strip_think_block(text));
-            assert_eq!(non_blank_post_processed_text(text), None);
-        }
-    }
-
-    #[test]
-    fn non_blank_post_processed_text_is_preserved() {
-        for text in ["Cleaned text.", "  정리된 문장입니다.\n", "0"] {
+    fn non_blank_grounded_text_is_preserved() {
+        for text in ["Click Save.", "  정리된 문장입니다.\n", "0"] {
             assert_eq!(
-                non_blank_post_processed_text(text.to_string()),
+                non_blank_grounded_text(text.to_string()),
                 Some(text.to_string())
             );
         }
@@ -1232,32 +959,6 @@ mod tests {
 
         cancel_thread.join().unwrap();
         assert_eq!(result, None);
-    }
-
-    #[test]
-    fn leading_think_block_is_stripped() {
-        assert_eq!(
-            strip_think_block("<think>pondering...</think>Cleaned text."),
-            "Cleaned text."
-        );
-        assert_eq!(
-            strip_think_block("  \n<think>multi\nline</think>\n  Cleaned text."),
-            "Cleaned text."
-        );
-    }
-
-    #[test]
-    fn content_without_think_block_is_unchanged() {
-        assert_eq!(strip_think_block("Cleaned text."), "Cleaned text.");
-        assert_eq!(
-            strip_think_block("Mentions <think> mid-sentence."),
-            "Mentions <think> mid-sentence."
-        );
-        // Unclosed block: leave untouched rather than guess
-        assert_eq!(
-            strip_think_block("<think>never closed"),
-            "<think>never closed"
-        );
     }
 
     #[test]

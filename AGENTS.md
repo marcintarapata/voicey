@@ -58,9 +58,11 @@ Handy is a cross-platform desktop speech-to-text application built with Tauri 2.
 - `lib.rs` - Main entry point, Tauri setup, manager initialization
 - `managers/` - Core business logic:
   - `audio.rs` - Audio recording and device management
-  - `model.rs` - Model downloading and management
+  - `model.rs` - Model downloading and management (Parakeet + the screen vision model)
   - `transcription.rs` - Speech-to-text processing pipeline
   - `history.rs` - Transcription history storage
+- `vlm_supervisor/` - The llama.cpp vision worker for screen grounding (own process, same supervision pattern as `engine_supervisor/`; stubbed where llama.cpp isn't compiled in)
+- `screen_capture.rs` - The one-frame screen grab for the grounded binding (Windows Graphics Capture with a GDI fallback; xcap on Linux; in-memory only, dev-only persistence)
 - `audio_toolkit/` - Low-level audio processing:
   - `audio/` - Recording sink (VAD, levels, live streaming feed), output devices, WAV I/O
   - `vad/` - Voice Activity Detection (Silero VAD)
@@ -97,7 +99,7 @@ Handy is a cross-platform desktop speech-to-text application built with Tauri 2.
 
 **Command-Event Architecture:** Frontend → Backend via Tauri commands; Backend → Frontend via events.
 
-**Pipeline Processing:** Audio → VAD → Whisper/Parakeet → Text output → Clipboard/Paste
+**Pipeline Processing:** Audio → VAD → Parakeet → Text output → Clipboard/Paste. The second binding (`transcribe_grounded`) adds a screen pass after transcription: one frame captured at release → local vision model (Qwen3-VL, supervised `--vlm-worker` process) → on-screen references resolved into the pasted text
 
 **State Flow:** Zustand → Tauri Command → Rust State → Persistence (tauri-plugin-store)
 
@@ -114,7 +116,7 @@ Handy is a cross-platform desktop speech-to-text application built with Tauri 2.
 ### Application Flow
 
 1. **Initialization:** App starts minimized to tray, loads settings, initializes managers
-2. **Model Setup:** First-run auto-downloads the pinned Parakeet model (`parakeet-tdt-0.6b-v3`, Q8_0); the settings window shows the progress
+2. **Model Setup:** First-run auto-downloads the pinned Parakeet model (`parakeet-tdt-0.6b-v3`, Q8_0) and then the screen vision model (Qwen3-VL-4B GGUF + mmproj, both sha256-pinned); the settings window shows the progress
 3. **Recording:** Global shortcut triggers audio recording with VAD filtering
 4. **Processing:** Audio sent to the Parakeet model for transcription
 5. **Output:** Text pasted to active application via system clipboard
@@ -200,7 +202,7 @@ Handy supports command-line parameters on all platforms for integration with scr
 | Flag                     | Description                                                |
 | ------------------------ | ---------------------------------------------------------- |
 | `--toggle-transcription` | Toggle recording on/off on a running instance              |
-| `--toggle-post-process`  | Toggle recording with post-processing on/off               |
+| `--toggle-grounded`      | Toggle grounded dictation on/off on a running instance     |
 | `--cancel`               | Cancel the current operation on a running instance         |
 | `--start-hidden`         | Launch without showing the main window (tray icon visible) |
 | `--no-tray`              | Launch without system tray (closing window quits the app)  |

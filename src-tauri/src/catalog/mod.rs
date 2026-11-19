@@ -371,6 +371,59 @@ pub static LANGUAGE_DETECTOR: Lazy<Option<LanguageDetectorFile>> = Lazy::new(|| 
     })
 });
 
+/// One pinned file of the screen-grounding vision model.
+pub struct ScreenVlmFile {
+    pub filename: &'static str,
+    pub size_bytes: u64,
+    pub sha256: &'static str,
+}
+
+/// The local vision model that grounds the second dictation binding: what
+/// the screen showed is resolved into the transcript, entirely on-device.
+///
+/// Hand-pinned, not a catalog.json entry: the catalog stays the verbatim
+/// `@handy-computer/models` copy of transcription models, and Qwen3-VL is
+/// neither. Pinned the same way — one Hugging Face repo, one revision, per
+/// file sizes and SHA-256 — so the existing hf-hub download flow verifies
+/// the exact bytes. No mirrors: `blob.handy.computer` hosts catalog files
+/// only, so a failed HF fetch is reported rather than mirrored.
+pub struct ScreenVlmModel {
+    pub repo_id: &'static str,
+    pub revision: &'static str,
+    /// The language model (Q4_K_M ≈ 2.5 GB).
+    pub model_file: ScreenVlmFile,
+    /// The multimodal projection — the vision encoder (F16 ≈ 836 MB).
+    pub mmproj_file: ScreenVlmFile,
+}
+
+pub static SCREEN_VLM: ScreenVlmModel = ScreenVlmModel {
+    repo_id: "Qwen/Qwen3-VL-4B-Instruct-GGUF",
+    revision: "1cd86afb9a95c410a6038ab3b40d8b578c892266",
+    model_file: ScreenVlmFile {
+        filename: "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+        size_bytes: 2_497_281_664,
+        sha256: "66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a",
+    },
+    mmproj_file: ScreenVlmFile {
+        filename: "mmproj-Qwen3VL-4B-Instruct-F16.gguf",
+        size_bytes: 836_180_256,
+        sha256: "256f3a43bd4205ffef48d6b92715e1e70b5b0e9aef06522584967513a9985331",
+    },
+};
+
+impl ScreenVlmModel {
+    /// Both files in download order, with each file's progress segment
+    /// (`(file, offset, total)` out of both files' bytes). The projection
+    /// goes first: it's the smaller file, so a failed language-model fetch
+    /// still leaves the vision tower verified and on disk.
+    pub fn files(&self) -> [(&ScreenVlmFile, u64, u64); 2] {
+        let mmproj = &self.mmproj_file;
+        let model = &self.model_file;
+        let total = mmproj.size_bytes + model.size_bytes;
+        [(mmproj, 0, total), (model, mmproj.size_bytes, total)]
+    }
+}
+
 /// A mirror copy of a catalog model's file, with the expected content hash for
 /// end-to-end verification. Mirrors are untrusted bit-pipes: the sha256 here
 /// (from the catalog compiled into the binary) is the trust anchor.
@@ -646,6 +699,35 @@ mod tests {
             "catalog architecture(s) missing from KNOWN_ARCHES: {:?}",
             missing
         );
+    }
+
+    #[test]
+    fn the_screen_vision_model_is_pinned_with_verifiable_files() {
+        let vlm = &SCREEN_VLM;
+        assert!(vlm.repo_id.starts_with("Qwen/Qwen3-VL"));
+        // A revision is a full 40-hex commit id, never "main".
+        assert_eq!(vlm.revision.len(), 40);
+        assert!(vlm.revision.chars().all(|c| c.is_ascii_hexdigit()));
+        for file in [&vlm.model_file, &vlm.mmproj_file] {
+            // 64-hex sha256 pins: downloads verify the exact bytes.
+            assert_eq!(file.sha256.len(), 64);
+            assert!(file.sha256.chars().all(|c| c.is_ascii_hexdigit()));
+            assert!(file.size_bytes > 0);
+            assert!(file.filename.ends_with(".gguf"));
+        }
+        // The language model is the multi-gigabyte file; the projection the
+        // smaller one. If a pin update ever swaps those, the progress bar's
+        // segments would silently invert.
+        assert!(vlm.model_file.size_bytes > vlm.mmproj_file.size_bytes);
+    }
+
+    #[test]
+    fn screen_vision_model_files_fill_one_progress_bar() {
+        let [(first, offset_a, total_a), (second, offset_b, total_b)] = SCREEN_VLM.files();
+        assert_eq!(offset_a, 0);
+        assert_eq!(total_a, total_b);
+        assert_eq!(offset_b, first.size_bytes);
+        assert_eq!(total_b, first.size_bytes + second.size_bytes);
     }
 
     #[test]

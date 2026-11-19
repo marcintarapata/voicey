@@ -70,6 +70,34 @@ if (-not $glslc) {
     $missing.Add("glslc / Vulkan SDK (Vulkan backend shader compilation) -- install: winget install KhronosGroup.VulkanSDK (then open a new terminal)")
 }
 
+# libclang.dll -- required by llama-cpp-sys-2's bindgen step (the screen
+# vision model's bindings). The pip `libclang` package is the lightest
+# install (no admin rights); LLVM itself works too.
+$libclang = "clang\native\libclang.dll"
+$libclangUser = Join-Path $env:APPDATA "Python\Python314\site-packages\$libclang"
+$libclangPipMissing = $false
+if (-not (Test-Path $libclangUser)) {
+    if (-not (Test-Path "C:\Program Files\LLVM\bin\libclang.dll")) {
+        $missing.Add("libclang.dll (bindgen for the vision model) -- install: python -m pip install libclang  (or winget install LLVM.LLVM, then set LIBCLANG_PATH)")
+        $libclangPipMissing = $true
+    }
+}
+
+# ninja -- llama.cpp's cmake build must use the Ninja generator: the VS
+# generator's parallel custom-build rules race on the vulkan-shaders-gen
+# ExternalProject ("The system cannot find the batch label specified").
+$ninjaDirs = @(
+    "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja",
+    "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja"
+)
+$ninjaOk = $false
+foreach ($dir in $ninjaDirs) {
+    if (Test-Path (Join-Path $dir "ninja.exe")) { $ninjaOk = $true; break }
+}
+if (-not $ninjaOk) {
+    $missing.Add("ninja (llama.cpp's cmake generator) -- ships with VS Build Tools' CMake component; or: winget install Ninja-build.Ninja")
+}
+
 # WebView2 runtime -- the app's UI host
 $webview2 = Test-Path "C:\Program Files (x86)\Microsoft\EdgeWebView\Application"
 if (-not $webview2) {
@@ -88,7 +116,7 @@ if ($missing.Count -gt 0) {
     exit 2
 }
 
-Write-Output "VOICEY-BUILD: toolchain probe OK (bun, cargo/msvc, cmake, glslc, WebView2)"
+Write-Output "VOICEY-BUILD: toolchain probe OK (bun, cargo/msvc, cmake, glslc, WebView2, libclang, ninja)"
 
 # ---------------------------------------------------------------------------
 # 2. Build.
@@ -100,6 +128,27 @@ if (-not (Test-Path (Join-Path $StageDir "package.json"))) {
 
 Set-Location $StageDir
 
+# The vision model's native build needs these; see the probe block above.
+# Ninja applies to every cmake build in the process (cmake bootstraps the
+# MSVC environment itself for Ninja, so transcribe-cpp builds fine too).
+$env:CMAKE_GENERATOR = "Ninja"
+if (Test-Path $libclangUser) {
+    $env:LIBCLANG_PATH = Split-Path $libclangUser
+} elseif (Test-Path "C:\Program Files\LLVM\bin\libclang.dll") {
+    $env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
+}
+foreach ($dir in $ninjaDirs) {
+    if (Test-Path (Join-Path $dir "ninja.exe")) { $env:PATH = "$dir;$env:PATH"; break }
+}
+
+# Build through a short target dir: the deep default path under the stage
+# overflows MSVC's ~260-character limit (cl.exe PDB writes fail with a
+# misleading C1041 "multiple CL.EXE" error, and the VS generator's batch
+# labels break on long paths too). transcribe-libs staging and every
+# artifact path below read this location.
+$env:CARGO_TARGET_DIR = "C:\v3rel"
+$targetRelease = Join-Path $env:CARGO_TARGET_DIR "release"
+
 Write-Output "VOICEY-BUILD: bun install"
 bun install
 if ($LASTEXITCODE -ne 0) { Write-Output "VOICEY-BUILD: bun install failed ($LASTEXITCODE)"; exit 4 }
@@ -109,8 +158,8 @@ bun run tauri build --bundles nsis
 if ($LASTEXITCODE -ne 0) { Write-Output "VOICEY-BUILD: tauri build failed ($LASTEXITCODE)"; exit 5 }
 
 $version = (Get-Content "src-tauri\tauri.conf.json" | ConvertFrom-Json).version
-$releaseExe = Join-Path $StageDir "src-tauri\target\release\voicey.exe"
-$nsisExe = Get-ChildItem (Join-Path $StageDir "src-tauri\target\release\bundle\nsis") -Filter "*-setup.exe" |
+$releaseExe = Join-Path $targetRelease "voicey.exe"
+$nsisExe = Get-ChildItem (Join-Path $targetRelease "bundle\nsis") -Filter "*-setup.exe" |
     Select-Object -First 1
 if (-not (Test-Path $releaseExe) -or -not $nsisExe) {
     Write-Output "VOICEY-BUILD: build outputs missing (exe or nsis bundle)"

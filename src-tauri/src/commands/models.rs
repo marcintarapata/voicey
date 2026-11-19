@@ -1,4 +1,6 @@
-use crate::managers::model::{ModelInfo, ModelManager, RetiredModel, LANGUAGE_DETECTOR_ID};
+use crate::managers::model::{
+    ModelInfo, ModelManager, RetiredModel, LANGUAGE_DETECTOR_ID, SCREEN_VLM_ID,
+};
 use crate::managers::transcription::{ModelStateEvent, TranscriptionManager};
 use crate::notices::{self, NoticeSource};
 use crate::settings::{get_settings, write_settings, ModelUnloadTimeout};
@@ -87,6 +89,37 @@ pub async fn download_language_detector(
         let _ = app_handle.emit(
             "model-download-failed",
             serde_json::json!({ "model_id": LANGUAGE_DETECTOR_ID, "error": error }),
+        );
+    }
+    result
+}
+
+/// Whether the screen-grounding vision model is fully on disk; the first-run
+/// panel gates on this alongside the pinned Parakeet.
+#[tauri::command]
+#[specta::specta]
+pub fn is_screen_vlm_downloaded(model_manager: State<'_, Arc<ModelManager>>) -> bool {
+    model_manager.is_screen_vlm_downloaded()
+}
+
+/// Download the screen-grounding vision model (both pinned files). Progress,
+/// verification, completion, cancellation and failure use the model download
+/// events under `SCREEN_VLM_ID`, both files filling one bar.
+#[tauri::command]
+#[specta::specta]
+pub async fn download_screen_vlm(
+    app_handle: AppHandle,
+    model_manager: State<'_, Arc<ModelManager>>,
+) -> Result<(), String> {
+    let result = model_manager
+        .download_screen_vlm()
+        .await
+        .map_err(|e| e.to_string());
+    if let Err(ref error) = result {
+        error!("Screen vision model download failed: {}", error);
+        let _ = app_handle.emit(
+            "model-download-failed",
+            serde_json::json!({ "model_id": SCREEN_VLM_ID, "error": error }),
         );
     }
     result

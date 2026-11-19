@@ -577,7 +577,7 @@ pub struct TranscriptionCoordinator {
 }
 
 pub fn is_transcribe_binding(id: &str) -> bool {
-    id == "transcribe" || id == "transcribe_with_post_process"
+    id == "transcribe" || id == "transcribe_grounded"
 }
 
 impl TranscriptionCoordinator {
@@ -830,7 +830,7 @@ mod tests {
                 Some("transcribe"),
                 true,
                 true,
-                "transcribe_with_post_process",
+                "transcribe_grounded",
                 Some("transcribe")
             ),
             PttAction::Passthrough
@@ -1181,7 +1181,7 @@ mod tests {
         assert_eq!(state.stage, Stage::Processing);
     }
 
-    const OTHER_BINDING: &str = "transcribe_with_post_process";
+    const OTHER_BINDING: &str = "transcribe_grounded";
 
     /// Only one press can be pending. Once a binding has claimed it, a toggle
     /// for a different binding is ignored (as it is while recording) instead of

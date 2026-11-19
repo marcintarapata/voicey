@@ -1,6 +1,4 @@
 mod actions;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-mod apple_intelligence;
 mod audio_feedback;
 pub mod audio_toolkit;
 mod autostart;
@@ -13,7 +11,6 @@ pub mod engine_supervisor;
 mod helpers;
 mod input;
 mod language_detection;
-mod llm_client;
 mod managers;
 mod memory;
 mod notices;
@@ -22,6 +19,7 @@ mod paste_tx;
 pub mod portable;
 #[cfg(target_os = "linux")]
 mod primary_selection;
+mod screen_capture;
 mod secure_input;
 mod settings;
 mod shortcut;
@@ -32,6 +30,7 @@ mod transcription_hook;
 mod tray;
 mod tray_i18n;
 mod utils;
+pub mod vlm_supervisor;
 pub mod webkit_renderer;
 
 pub use cli::CliArgs;
@@ -47,7 +46,7 @@ pub use utils::{disable_gamescope_wsi_layer, gamescope_wsi_disabled_by_handy};
 use env_filter::Builder as EnvFilterBuilder;
 use managers::audio::AudioRecordingManager;
 use managers::history::HistoryManager;
-use managers::model::ModelManager;
+use managers::model::{ModelManager, SCREEN_VLM_ID};
 use managers::transcription::TranscriptionManager;
 use managers::transcription_jobs::TranscriptionJobManager;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -226,11 +225,17 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(history_manager.clone());
     app_handle.manage(tray::TrayState::new());
     app_handle.manage(TranscriptionJobManager::new(app_handle));
+    // The supervised llama.cpp worker for screen grounding. Same GPU rule as
+    // the transcription engine: none at all when the host must not use one.
+    let vlm_gpu_allowed = !crate::utils::is_windows_x64_emulated_on_arm64();
+    app_handle.manage(vlm_supervisor::VlmSupervisor::new(vlm_gpu_allowed));
 
-    // Voicey ships exactly one dictation model (the pinned Parakeet). If it is
-    // not on disk yet — a fresh install, or a deleted model — download it
-    // automatically right away. The settings window's first-run panel and the
-    // footer track the same `model-download-*` events this emits.
+    // Voicey ships exactly one dictation model (the pinned Parakeet) and one
+    // screen-grounding vision model. If either is not on disk yet — a fresh
+    // install, or a deleted file — download them automatically right away:
+    // Parakeet first (dictation is the product), the vision model after it
+    // (D9: first run downloads both models). The settings window's first-run
+    // panel and the footer track the same `model-download-*` events.
     ensure_pinned_model_available(app_handle);
 
     // Note: Shortcuts are NOT initialized here.
@@ -403,19 +408,49 @@ fn ensure_pinned_model_available(app_handle: &AppHandle) {
         .get_model_info(pinned)
         .map(|model| model.is_downloaded)
         .unwrap_or(false);
-    if is_downloaded {
+    if !is_downloaded {
+        log::info!(
+            "Pinned model '{}' is not on disk; starting automatic download",
+            pinned
+        );
+        let manager = model_manager.inner().clone();
+        let model_id = pinned.to_string();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = manager.download_model(&model_id).await {
+                log::error!("Automatic download of '{}' failed: {}", model_id, e);
+            }
+            // Then the screen-grounding vision model (D9: first run downloads
+            // both). Chained, not parallel: the two would split one
+            // connection's bandwidth, and the retry logic in the HF fetcher
+            // was tuned for one transfer at a time. A Parakeet failure still
+            // lets the vision model download, since either retries on its own.
+            if let Err(e) = manager.download_screen_vlm().await {
+                log::error!("Automatic download of '{}' failed: {}", SCREEN_VLM_ID, e);
+            }
+        });
+    } else {
+        // Parakeet already there (a later launch, or a fresh install whose
+        // dictation download finished): the vision model may still be
+        // missing — deleted files, or an interrupted earlier download.
+        ensure_screen_vlm_available(app_handle);
+    }
+}
+
+/// Make sure the screen-grounding vision model is on disk, downloading it
+/// in the background when it is not (D9). Called at every startup once the
+/// pinned Parakeet is already present — first run reaches this through the
+/// chained download instead — and the first-run panel tracks the progress
+/// this emits under `SCREEN_VLM_ID`.
+fn ensure_screen_vlm_available(app_handle: &AppHandle) {
+    let model_manager = app_handle.state::<Arc<ModelManager>>();
+    if model_manager.is_screen_vlm_downloaded() {
         return;
     }
-
-    log::info!(
-        "Pinned model '{}' is not on disk; starting automatic download",
-        pinned
-    );
+    log::info!("Screen vision model is not on disk; starting automatic download");
     let manager = model_manager.inner().clone();
-    let model_id = pinned.to_string();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = manager.download_model(&model_id).await {
-            log::error!("Automatic download of '{}' failed: {}", model_id, e);
+        if let Err(e) = manager.download_screen_vlm().await {
+            log::error!("Automatic download of '{}' failed: {}", SCREEN_VLM_ID, e);
         }
     });
 }
@@ -735,18 +770,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_clipboard_handling_setting,
             shortcut::change_auto_submit_setting,
             shortcut::change_auto_submit_key_setting,
-            shortcut::change_post_process_enabled_setting,
             shortcut::change_experimental_enabled_setting,
-            shortcut::change_post_process_base_url_setting,
-            shortcut::change_post_process_api_format_setting,
-            shortcut::change_post_process_api_key_setting,
-            shortcut::change_post_process_model_setting,
-            shortcut::set_post_process_provider,
-            shortcut::fetch_post_process_models,
-            shortcut::add_post_process_prompt,
-            shortcut::update_post_process_prompt,
-            shortcut::delete_post_process_prompt,
-            shortcut::set_post_process_selected_prompt,
             shortcut::update_custom_words,
             shortcut::suspend_all_bindings,
             shortcut::resume_all_bindings,
@@ -785,7 +809,6 @@ pub fn run(cli_args: CliArgs) {
             commands::open_recordings_folder,
             commands::open_log_dir,
             commands::open_app_data_dir,
-            commands::check_apple_intelligence_available,
             commands::initialize_enigo,
             commands::initialize_shortcuts,
             commands::reset_macos_permission,
@@ -795,6 +818,8 @@ pub fn run(cli_args: CliArgs) {
             commands::models::download_model,
             commands::models::download_language_detector,
             commands::models::is_language_detector_downloaded,
+            commands::models::download_screen_vlm,
+            commands::models::is_screen_vlm_downloaded,
             commands::models::delete_model,
             commands::models::get_retired_models,
             commands::models::delete_retired_model,
@@ -931,8 +956,8 @@ pub fn run(cli_args: CliArgs) {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if args.iter().any(|a| a == "--toggle-transcription") {
                 signal_handle::send_transcription_input(app, "transcribe", "CLI");
-            } else if args.iter().any(|a| a == "--toggle-post-process") {
-                signal_handle::send_transcription_input(app, "transcribe_with_post_process", "CLI");
+            } else if args.iter().any(|a| a == "--toggle-grounded") {
+                signal_handle::send_transcription_input(app, "transcribe_grounded", "CLI");
             } else if args.iter().any(|a| a == "--cancel") {
                 crate::utils::cancel_current_operation(app);
             } else {

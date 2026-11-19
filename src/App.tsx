@@ -42,10 +42,16 @@ function App() {
   const direction = getLanguageDirection(i18n.language);
   const models = useModelStore((state) => state.models);
   const modelsLoading = useModelStore((state) => state.loading);
-  // First run lasts exactly as long as the pinned Parakeet download.
+  const screenVlmDownloaded = useModelStore(
+    (state) => state.screenVlmDownloaded,
+  );
+  // First run lasts exactly as long as both model downloads (D9: the speech
+  // model and the screen-grounding vision model).
   const parakeet = models.find((model) => model.id === PINNED_MODEL_ID);
   const firstRun =
-    !modelsLoading && parakeet !== undefined && !parakeet.is_downloaded;
+    !modelsLoading &&
+    parakeet !== undefined &&
+    (!parakeet.is_downloaded || !screenVlmDownloaded);
   const refreshAudioDevices = useSettingsStore(
     (state) => state.refreshAudioDevices,
   );

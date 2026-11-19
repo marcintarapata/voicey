@@ -26,10 +26,10 @@ pub fn send_transcription_input(app: &AppHandle, binding_id: &str, source: &str)
 /// Listen for Unix signals that remotely toggle transcription.
 ///
 /// SIGUSR2 toggles plain transcription on all Unix platforms. SIGUSR1
-/// (transcription with post-processing) is only handled on macOS: on Linux,
+/// (grounded transcription) is only handled on macOS: on Linux,
 /// WebKitGTK's JavaScriptCore garbage collector sends SIGUSR1 to its own
 /// threads to suspend them, so handling it caused phantom recordings on every
-/// GC cycle (#1660). Linux users should use `handy --toggle-post-process`
+/// GC cycle (#1660). Linux users should use `handy --toggle-grounded`
 /// instead.
 #[cfg(unix)]
 pub fn setup_signal_handler(app_handle: AppHandle) {
@@ -47,7 +47,7 @@ pub fn setup_signal_handler(app_handle: AppHandle) {
         for sig in signals.forever() {
             let (binding_id, signal_name) = match sig {
                 #[cfg(target_os = "macos")]
-                SIGUSR1 => ("transcribe_with_post_process", "SIGUSR1"),
+                SIGUSR1 => ("transcribe_grounded", "SIGUSR1"),
                 SIGUSR2 => ("transcribe", "SIGUSR2"),
                 _ => continue,
             };

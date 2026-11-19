@@ -528,6 +528,12 @@ fn local_caps(probe: &CapabilityProbe) -> LocalCaps {
 /// progress, completion and cancellation, like a model's.
 pub const LANGUAGE_DETECTOR_ID: &str = "language-detector";
 
+/// Download id under which the screen-grounding vision model (and its
+/// multimodal projection) report progress, completion and cancellation, like
+/// any model's. The first-run panel and the footer track these events; the
+/// grounded dictation binding waits on the files it names.
+pub const SCREEN_VLM_ID: &str = "screen-vlm";
+
 /// Where one file's download progress is reported: under `model_id`, its bytes
 /// counted from `offset`, out of `total` (default: `offset` + the file's own
 /// size). Lets two files (the language detector, then a model) fill one bar.
@@ -875,6 +881,9 @@ pub struct ModelManager {
     /// One language detector transfer at a time, however many downloads
     /// want it.
     detector_download: tokio::sync::Mutex<()>,
+    /// One screen-vision-model transfer at a time: a second caller waits,
+    /// then finds the files there.
+    screen_vlm_download: tokio::sync::Mutex<()>,
 }
 
 impl ModelManager {
@@ -1079,6 +1088,7 @@ impl ModelManager {
             cancel_flags: Arc::new(Mutex::new(HashMap::new())),
             is_rescanning: Arc::new(AtomicBool::new(false)),
             detector_download: tokio::sync::Mutex::new(()),
+            screen_vlm_download: tokio::sync::Mutex::new(()),
         };
 
         // Migrate any bundled models to user directory
@@ -1960,6 +1970,107 @@ impl ModelManager {
                 .emit("model-download-complete", LANGUAGE_DETECTOR_ID);
         }
         Ok(())
+    }
+
+    /// Both files of the pinned screen-grounding vision model, fully on disk:
+    /// `(model_path, mmproj_path)`, in the HF cache or the models dir
+    /// (mirror fallback / manual drop-in), resolved like any other pinned
+    /// file. `None` while either file is missing.
+    pub fn screen_vlm_paths(&self) -> Option<(PathBuf, PathBuf)> {
+        let vlm = &crate::catalog::SCREEN_VLM;
+        let resolve = |file: &crate::catalog::ScreenVlmFile| {
+            hf_cached_path(vlm.repo_id, vlm.revision, file.filename).or_else(|| {
+                let local = self.models_dir.join(file.filename);
+                local.is_file().then_some(local)
+            })
+        };
+        Some((resolve(&vlm.model_file)?, resolve(&vlm.mmproj_file)?))
+    }
+
+    /// Whether the grounded dictation binding can run without a download.
+    pub fn is_screen_vlm_downloaded(&self) -> bool {
+        self.screen_vlm_paths().is_some()
+    }
+
+    /// Download the screen-grounding vision model (both pinned files) unless
+    /// it is on disk. Started automatically on first run after the Parakeet,
+    /// and on demand when the grounded binding fires without the files;
+    /// progress, verification and completion report under [`SCREEN_VLM_ID`]
+    /// with both files filling one bar. `Ok(())` without downloading when the
+    /// files are already there or the download is cancelled.
+    pub async fn download_screen_vlm(&self) -> Result<()> {
+        let cancel_token = CancellationToken::new();
+        self.cancel_flags
+            .lock()
+            .unwrap()
+            .insert(SCREEN_VLM_ID.to_string(), cancel_token.clone());
+        let fetched = self.fetch_screen_vlm(&cancel_token).await;
+        self.cancel_flags.lock().unwrap().remove(SCREEN_VLM_ID);
+        if fetched? {
+            let _ = self
+                .app_handle
+                .emit("model-download-complete", SCREEN_VLM_ID);
+        }
+        Ok(())
+    }
+
+    /// Fetch both vision-model files unless they are on disk. One transfer
+    /// at a time: a second caller waits, then finds them there. The smaller
+    /// projection file goes first so one bar's segments ascend. `Ok(false)`
+    /// if cancelled (partials kept for resume).
+    async fn fetch_screen_vlm(&self, cancel_token: &CancellationToken) -> Result<bool> {
+        let vlm = &crate::catalog::SCREEN_VLM;
+        let _single = tokio::select! {
+            guard = self.screen_vlm_download.lock() => guard,
+            _ = cancel_token.cancelled() => return Ok(false),
+        };
+        if self.screen_vlm_paths().is_some() {
+            return Ok(true);
+        }
+        for (file, offset, total) in vlm.files() {
+            // In the HF cache, or in the models dir (mirror fallback /
+            // manual drop-in) — resolved like every other pinned file.
+            let resolve = || {
+                hf_cached_path(vlm.repo_id, vlm.revision, file.filename).or_else(|| {
+                    self.models_dir
+                        .join(file.filename)
+                        .is_file()
+                        .then(|| self.models_dir.join(file.filename))
+                })
+            };
+            let path = match resolve() {
+                // On disk already: verify against the pin so a corrupt
+                // drop-in or a bad partial is caught here, not by the
+                // worker mid-dictation.
+                Some(path) => path,
+                None => {
+                    let transfer = FileTransfer {
+                        label: "the screen vision model",
+                        repo_id: vlm.repo_id,
+                        revision: vlm.revision,
+                        filename: file.filename,
+                        // blob.handy.computer hosts catalog files only, so a
+                        // failed Hugging Face fetch is reported, not
+                        // mirrored.
+                        mirrors: Vec::new(),
+                        progress: ProgressTarget {
+                            model_id: SCREEN_VLM_ID.to_string(),
+                            offset,
+                            total: Some(total),
+                        },
+                    };
+                    if !self.fetch_hf_file(&transfer, cancel_token).await? {
+                        return Ok(false);
+                    }
+                    resolve().ok_or_else(|| {
+                        anyhow::anyhow!("{} fetched but not found afterwards", file.filename)
+                    })?
+                }
+            };
+            Self::verify_hf_cached_file(&self.app_handle, SCREEN_VLM_ID, &path, file.sha256)
+                .await?;
+        }
+        Ok(true)
     }
 
     /// Fetch the language detector unless it's on disk. One transfer at a

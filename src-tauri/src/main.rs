@@ -35,6 +35,11 @@ fn main() {
         std::process::exit(voicey_app_lib::engine_supervisor::run_worker());
     }
 
+    // Vision worker: same isolation for the screen-grounding llama.cpp worker.
+    if voicey_app_lib::vlm_supervisor::is_worker_invocation() {
+        std::process::exit(voicey_app_lib::vlm_supervisor::run_worker());
+    }
+
     let cli_args = CliArgs::parse();
     voicey_app_lib::run(cli_args)
 }

@@ -37,6 +37,21 @@ This guide covers how to set up the development environment and build Voicey fro
 
   Open a new terminal afterward so `VULKAN_SDK` is set.
 
+- `libclang.dll` — required by the vision model's Rust bindings
+  (llama-cpp-sys-2 generates them with bindgen at build time). The lightest
+  install is the pip package (no admin rights):
+
+  ```powershell
+  python -m pip install libclang
+  ```
+
+  (An LLVM install works too; point `LIBCLANG_PATH` at its `bin` directory.)
+
+- `ninja` — llama.cpp's cmake build uses the Ninja generator (the Visual
+  Studio generator's parallel custom-build rules race on its
+  vulkan-shaders-gen step). Ninja ships with the VS Build Tools' CMake
+  component; `build-windows.ps1` puts it on `PATH` and sets the generator.
+
 > [!NOTE]
 > Windows' 260-character path limit used to break the native Vulkan build in
 > most checkouts. Since `transcribe-cpp` 0.1.3 the build works around it

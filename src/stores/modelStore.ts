@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { commands, type ModelInfo } from "@/bindings";
 import i18n from "@/i18n";
 import { notify, useNoticeStore } from "@/stores/noticeStore";
+import { SCREEN_VLM_ID } from "@/lib/pinnedModel";
 
 const downloadNoticeKey = (modelId: string) => `model-download:${modelId}`;
 
@@ -28,6 +29,8 @@ interface ModelsStore {
   error: string | null;
   initialized: boolean;
   isRescanning: boolean;
+  /** Whether both pinned screen-vision files are on disk (`SCREEN_VLM_ID`). */
+  screenVlmDownloaded: boolean;
 
   // Actions
   initialize: () => Promise<void>;
@@ -36,6 +39,8 @@ interface ModelsStore {
   rescanLocalModels: () => Promise<void>;
   selectModel: (modelId: string) => Promise<boolean>;
   downloadModel: (modelId: string) => Promise<boolean>;
+  downloadScreenVlm: () => Promise<boolean>;
+  loadScreenVlmStatus: () => Promise<void>;
   cancelDownload: (modelId: string) => Promise<boolean>;
   deleteModel: (modelId: string) => Promise<boolean>;
   getModelInfo: (modelId: string) => ModelInfo | undefined;
@@ -61,6 +66,7 @@ export const useModelStore = create<ModelsStore>()(
     error: null,
     initialized: false,
     isRescanning: false,
+    screenVlmDownloaded: false,
 
     // Internal setters
     setModels: (models) => set({ models }),
@@ -193,6 +199,55 @@ export const useModelStore = create<ModelsStore>()(
       }
     },
 
+    // The vision model is not a catalog model: its status comes from its own
+    // command and its download from `downloadScreenVlm`, but the progress,
+    // completion, verification and failure events are the same generic
+    // `model-download-*` events, keyed by `SCREEN_VLM_ID`.
+    loadScreenVlmStatus: async () => {
+      try {
+        const downloaded = await commands.isScreenVlmDownloaded();
+        set({ screenVlmDownloaded: downloaded });
+      } catch (err) {
+        console.error("Failed to load screen vision model status:", err);
+      }
+    },
+
+    downloadScreenVlm: async () => {
+      try {
+        useNoticeStore.getState().clearLocal(downloadNoticeKey(SCREEN_VLM_ID));
+        set({ error: null });
+        set(
+          produce((state) => {
+            state.downloadingModels[SCREEN_VLM_ID] = true;
+            state.downloadProgress[SCREEN_VLM_ID] = {
+              model_id: SCREEN_VLM_ID,
+              downloaded: 0,
+              total: 0,
+              percentage: 0,
+            };
+          }),
+        );
+        const result = await commands.downloadScreenVlm();
+        if (result.status !== "ok") {
+          set(
+            produce((state) => {
+              delete state.downloadingModels[SCREEN_VLM_ID];
+              delete state.downloadProgress[SCREEN_VLM_ID];
+            }),
+          );
+        }
+        return result.status === "ok";
+      } catch {
+        set(
+          produce((state) => {
+            delete state.downloadingModels[SCREEN_VLM_ID];
+            delete state.downloadProgress[SCREEN_VLM_ID];
+          }),
+        );
+        return false;
+      }
+    },
+
     cancelDownload: async (modelId: string) => {
       try {
         set({ error: null });
@@ -259,6 +314,7 @@ export const useModelStore = create<ModelsStore>()(
 
       // Load initial data
       await Promise.all([loadModels(), loadCurrentModel()]);
+      await get().loadScreenVlmStatus();
 
       // Set up event listeners
       listen<DownloadProgress>("model-download-progress", (event) => {
@@ -280,6 +336,9 @@ export const useModelStore = create<ModelsStore>()(
           }),
         );
         get().loadModels();
+        if (modelId === SCREEN_VLM_ID) {
+          get().loadScreenVlmStatus();
+        }
       });
 
       listen<{ model_id: string; error: string }>(
@@ -299,6 +358,9 @@ export const useModelStore = create<ModelsStore>()(
             detail: error,
             key: downloadNoticeKey(modelId),
           });
+          if (modelId === SCREEN_VLM_ID) {
+            get().loadScreenVlmStatus();
+          }
         },
       );
 

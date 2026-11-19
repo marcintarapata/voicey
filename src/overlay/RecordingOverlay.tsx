@@ -21,6 +21,7 @@ type OverlayState =
   | "streaming"
   | "transcribing"
   | "processing"
+  | "grounding"
   | "notice"
   | "live_notice";
 
@@ -418,8 +419,8 @@ const RecordingOverlay: React.FC = () => {
             ? noticeRow
             : working
               ? workingRow(
-                  workKind === "polishing"
-                    ? t("overlay.processing")
+                  workKind === "grounding"
+                    ? t("overlay.grounding")
                     : transcribingLabel,
                   true,
                 )
@@ -430,11 +431,17 @@ const RecordingOverlay: React.FC = () => {
   }
 
   // ---- Minimal overlay: exactly one row at a time — waveform (recording), or a
-  // spinner + label (transcribing / processing). Never both. The pill animates its
-  // width between them; the cancel button is in both rows so it stays put.
-  const working = state === "transcribing" || state === "processing";
+  // spinner + label (transcribing / processing / grounding). Never both. The
+  // pill animates its width between them; the cancel button is in both rows so
+  // it stays put.
+  const working =
+    state === "transcribing" || state === "processing" || state === "grounding";
   const workLabel =
-    state === "processing" ? t("overlay.processing") : transcribingLabel;
+    state === "processing"
+      ? t("overlay.processing")
+      : state === "grounding"
+        ? t("overlay.grounding")
+        : transcribingLabel;
 
   return (
     <div

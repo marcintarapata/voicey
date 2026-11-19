@@ -146,6 +146,23 @@ transcribe-cpp = { version = "0.4.2", default-features = false, features = [
   "dynamic-backends",
   "vulkan",
 ] }
+# Screen grounding (Phase 3): the local vision model runs llama.cpp in a
+# supervised worker (same exe, `--vlm-worker`). Gated to the targets where
+# transcribe-cpp uses dynamic backends: there, ggml lives in transcribe.dll
+# and this static llama.cpp copy is the exe's only one. On the static-backend
+# platforms (Windows ARM, macOS) two static ggmls in one exe would collide,
+# and those platforms are outside Voicey's Windows-first target (D1) anyway;
+# the grounded binding there degrades to verbatim paste with a notice.
+llama-cpp-2 = { version = "0.1.161", default-features = false, features = [
+  "mtmd",
+  "vulkan",
+] }
+# Windows Graphics Capture for the one-frame screen grab; its `windows`
+# crate version is its own (0.62), which coexists with the app's 0.61.
+windows-capture = "2.0.1"
+# Dev-only telemetry writes captures as PNG (D10); also in the tree via
+# tauri's image-png feature, so this adds no new dependency graph.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(all(windows, target_arch = "aarch64"))'.dependencies]
 transcribe-cpp = { version = "0.4.2", default-features = false }
@@ -188,6 +205,16 @@ transcribe-cpp = { version = "0.4.2", default-features = false, features = [
   "dynamic-backends",
   "vulkan",
 ] }
+# Screen grounding on Linux dev builds: same worker, same gate rationale as
+# the Windows table above (transcribe-cpp is dynamic here too).
+llama-cpp-2 = { version = "0.1.161", default-features = false, features = [
+  "mtmd",
+  "vulkan",
+] }
+# The non-Windows capture seam: xcap (X11/Wayland). Unit tests and the dev
+# smoke exercise the real pipeline through it.
+xcap = "0.9.10"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # TEMPORARY: tao pinned past 0.35.3 for the Wayland client-side-decorations fix
 # (tao #1218, fixes tauri #11856 — dead titlebar buttons after visible(false) →
@@ -211,6 +238,8 @@ tao-macros = { git = "https://github.com/cjpais/tao", rev = "c3bee28c1d446d95f08
 
 [dev-dependencies]
 tempfile = "3"
+# The vlm_worker integration test speaks the wire protocol's JSON directly.
+serde_json = "1"
 # Test-only tokio features for the local socket servers exercising the
 # resumable HTTP downloader; normal builds keep the leaner feature set.
 tokio = { version = "1.43.0", features = ["macros", "net", "io-util", "sync", "time", "rt-multi-thread"] }

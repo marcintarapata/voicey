@@ -16,7 +16,6 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 
-use crate::actions::process_transcription_output;
 use crate::audio_toolkit::{decode_audio_file, read_wav_samples, save_wav_file};
 use crate::managers::history::{HistoryEntry, HistoryManager};
 use crate::managers::transcription::{
@@ -279,17 +278,9 @@ impl TranscriptionJobManager {
                         error: e.to_string(),
                     }
                 }
-                Ok(JobEnd::Finished {
-                    post_process_failed,
-                }) => {
-                    // Clear first, so the warning about this job survives it.
+                Ok(JobEnd::Finished) => {
+                    // Clear first, so any warning about this job survives it.
                     notices::clear(&self.app, NoticeSource::File);
-                    if post_process_failed {
-                        notices::raise(
-                            &self.app,
-                            Notice::new(NoticeCode::FilePostProcessFailed, NoticeSource::File),
-                        );
-                    }
                     TranscriptionJobStatus::Finished
                 }
                 _ => TranscriptionJobStatus::Finished,
@@ -326,32 +317,16 @@ impl TranscriptionJobManager {
             return Ok(JobEnd::Cancelled);
         }
 
-        let processed = tauri::async_runtime::block_on(process_transcription_output(
-            &self.app,
-            &text,
-            entry.post_process_requested,
-        ));
-        // Post-processing can take a while; a cancel during it still wins.
-        if cancelled.load(Ordering::Acquire) {
-            return Ok(JobEnd::Cancelled);
-        }
-        let post_process_failed = processed.post_process_failed;
-        hm.update_transcription(
-            entry.id,
-            text,
-            processed.post_processed_text,
-            processed.post_process_prompt,
-            language,
-        )?;
-        Ok(JobEnd::Finished {
-            post_process_failed,
-        })
+        // A re-transcribe produces the bare transcript; the grounded pass
+        // belongs to dictation, where a screen existed to ground against.
+        hm.update_transcription(entry.id, text, None, None, language)?;
+        Ok(JobEnd::Finished)
     }
 }
 
 /// A cancelled job changes no notices.
 enum JobEnd {
-    Finished { post_process_failed: bool },
+    Finished,
     Cancelled,
 }
 

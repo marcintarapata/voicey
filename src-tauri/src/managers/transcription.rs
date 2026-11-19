@@ -88,7 +88,8 @@ pub enum StreamPhase {
 #[serde(rename_all = "lowercase")]
 pub enum StreamWorkKind {
     Transcribing,
-    Polishing,
+    /// The screen-grounding pass: resolving what the transcript points at.
+    Grounding,
 }
 
 /// Emitted to switch the streaming overlay to a working spinner.

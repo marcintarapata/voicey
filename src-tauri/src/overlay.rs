@@ -665,9 +665,11 @@ pub fn show_transcribing_overlay(app_handle: &AppHandle) {
     show_overlay_state(app_handle, "transcribing");
 }
 
-/// Shows the processing overlay window
-pub fn show_processing_overlay(app_handle: &AppHandle) {
-    show_overlay_state(app_handle, "processing");
+/// Shows the grounding overlay window: the pass that resolves what the
+/// transcript points at on screen. A distinct state from plain processing,
+/// because it can take seconds and the user should know why.
+pub fn show_grounding_overlay(app_handle: &AppHandle) {
+    show_overlay_state(app_handle, "grounding");
 }
 
 /// Shows `notice` in place of the session's overlay and fades it after

@@ -4,7 +4,7 @@ import { Check, CircleAlert, Download, RotateCw } from "lucide-react";
 import { commands, type PermissionAccess } from "@/bindings";
 import { useModelStore } from "@/stores/modelStore";
 import { useOsType } from "@/hooks/useOsType";
-import { PINNED_MODEL_ID } from "@/lib/pinnedModel";
+import { PINNED_MODEL_ID, SCREEN_VLM_ID } from "@/lib/pinnedModel";
 import { ProgressBar } from "@/components/shared";
 import { Button } from "@/components/ui/Button";
 import { SettingsGroup } from "@/components/ui/SettingsGroup";
@@ -40,6 +40,14 @@ export const FirstRunSetup: React.FC = () => {
   const downloadFailed =
     !modelDownloaded && !modelDownloading && downloadError !== null;
 
+  // The screen vision model (D9: first run downloads both models). Its status
+  // and progress come from the same store, under its own download id.
+  const visionDownloaded = useModelStore((state) => state.screenVlmDownloaded);
+  const visionDownloading =
+    SCREEN_VLM_ID in downloadingModels || SCREEN_VLM_ID in verifyingModels;
+  const visionProgress = downloadProgress[SCREEN_VLM_ID];
+  const downloadScreenVlm = useModelStore((state) => state.downloadScreenVlm);
+
   const [micAccess, setMicAccess] = useState<PermissionAccess | null>(null);
   const [micChecking, setMicChecking] = useState(isWindows);
   // The automatic download is attempted at most once per mount; after a
@@ -67,9 +75,10 @@ export const FirstRunSetup: React.FC = () => {
     }
   }, [isWindows, checkMicPermission]);
 
-  // Belt-and-braces: the backend auto-downloads the pinned model at startup.
-  // If the store has settled and nothing is downloading (a backend race, or a
-  // failed first attempt), make sure the download is running.
+  // Belt-and-braces: the backend auto-downloads the pinned model at startup,
+  // and the vision model right behind it. If the store has settled and nothing
+  // is downloading (a backend race, or a failed first attempt), make sure both
+  // downloads are running.
   useEffect(() => {
     if (modelsLoading || !parakeet) return;
     if (modelDownloaded || modelDownloading) return;
@@ -84,9 +93,18 @@ export const FirstRunSetup: React.FC = () => {
     downloadModel,
   ]);
 
-  // Setup is done once the pinned model is on disk; App switches on the same
+  const visionTriggered = useRef(false);
+  useEffect(() => {
+    if (modelsLoading) return;
+    if (visionDownloaded || visionDownloading) return;
+    if (visionTriggered.current) return;
+    visionTriggered.current = true;
+    void downloadScreenVlm();
+  }, [modelsLoading, visionDownloaded, visionDownloading, downloadScreenVlm]);
+
+  // Setup is done once both models are on disk; App switches on the same
   // condition, so this only guards a re-render race.
-  if (modelDownloaded) {
+  if (modelDownloaded && visionDownloaded) {
     return null;
   }
 
@@ -99,6 +117,20 @@ export const FirstRunSetup: React.FC = () => {
             speed:
               progress?.bytes_per_sec != null
                 ? (progress.bytes_per_sec ?? 0) / 1_000_000
+                : undefined,
+          },
+        ]
+      : [];
+
+  const visionProgressData =
+    visionDownloading && visionProgress
+      ? [
+          {
+            id: SCREEN_VLM_ID,
+            percentage: visionProgress.percentage,
+            speed:
+              visionProgress.bytes_per_sec != null
+                ? visionProgress.bytes_per_sec / 1_000_000
                 : undefined,
           },
         ]
@@ -223,6 +255,56 @@ export const FirstRunSetup: React.FC = () => {
                 <div className="flex items-center gap-2 text-sm text-ink-2">
                   <Spinner className="w-4 h-4" />
                   {t("downloads.downloading")}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </SettingsGroup>
+
+      <SettingsGroup title={t("firstRun.visionModelTitle")}>
+        <div className="px-4 py-3 flex flex-col gap-3">
+          {visionDownloaded ? (
+            <div className="flex items-center gap-2 text-sm text-ink-2">
+              <Check
+                width={16}
+                height={16}
+                className="shrink-0 text-logo-primary"
+              />
+              {t("firstRun.visionModelReady")}
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-ink-2">
+                {t("firstRun.visionModelDescription")}
+              </p>
+              {visionDownloading ? (
+                <ProgressBar
+                  progress={visionProgressData}
+                  size="large"
+                  showSpeed={true}
+                />
+              ) : (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2 text-sm text-text">
+                    <CircleAlert
+                      width={16}
+                      height={16}
+                      className="shrink-0 text-logo-primary"
+                    />
+                    {t("firstRun.visionDownloadFailed")}
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="w-fit"
+                    onClick={() => {
+                      void downloadScreenVlm();
+                    }}
+                  >
+                    <Download className="w-4 h-4" />
+                    {t("firstRun.retryDownload")}
+                  </Button>
                 </div>
               )}
             </>

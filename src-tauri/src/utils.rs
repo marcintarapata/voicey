@@ -235,6 +235,12 @@ pub fn cancel_current_operation(app: &AppHandle) {
     tm.cancel_stream();
     tm.cancel_transcription();
 
+    // Stop the screen-grounding pass the same way: kill the vision worker so
+    // an in-flight grounding ends at once instead of running to its deadline.
+    if let Some(vlm) = app.try_state::<crate::vlm_supervisor::VlmSupervisor>() {
+        vlm.cancel();
+    }
+
     // Update tray icon and hide overlay
     set_tray_state(app, crate::tray::TrayIconState::Idle);
     hide_recording_overlay(app);

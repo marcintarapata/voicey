@@ -16,9 +16,10 @@ pub struct CliArgs {
     #[arg(long)]
     pub toggle_transcription: bool,
 
-    /// Toggle transcription with post-processing on/off (sent to running instance)
+    /// Toggle transcription with screen grounding on/off (sent to running
+    /// instance)
     #[arg(long)]
-    pub toggle_post_process: bool,
+    pub toggle_grounded: bool,
 
     /// Cancel the current operation (sent to running instance)
     #[arg(long)]
