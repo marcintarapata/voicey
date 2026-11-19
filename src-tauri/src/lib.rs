@@ -696,7 +696,7 @@ pub fn run(cli_args: CliArgs) {
     // instead of accumulating in malloc arenas (#1792). No-op off Linux/glibc.
     memory::init_allocator();
 
-    // Detect portable mode before anything else
+    // Activate single-folder storage (the only mode) before anything else
     portable::init();
 
     // Parse console logging directives from RUST_LOG, falling back to info-level logging

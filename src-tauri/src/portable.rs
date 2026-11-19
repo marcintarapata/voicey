@@ -1,8 +1,12 @@
-//! Portable mode support for Handy.
+//! Portable (single-folder) storage — the only mode.
 //!
-//! When a file named `portable` exists next to the executable, all user data
-//! (settings, models, recordings, database, logs) is stored in a `Data/`
-//! directory alongside the executable instead of `%APPDATA%`.
+//! Voicey keeps every piece of user data next to the executable in a `Data/`
+//! directory: settings store, `models/`, `history.db`, `logs/`, the Hugging
+//! Face download cache, and the WebView UI cache. There is no installer-mode
+//! profile directory and no marker file to opt in: storage lands beside the
+//! app unconditionally, so the shipped folder can be unzipped anywhere and
+//! run without admin rights, and replacing the binaries while keeping `Data/`
+//! is the whole update procedure.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -11,8 +15,12 @@ use tauri::Manager;
 static PORTABLE_DATA_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 static PREVIOUS_HF_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
 
-/// Detect portable mode by looking for a `portable` marker file next to the exe.
-/// Must be called once at startup before Tauri initializes.
+/// Activate single-folder storage. Must be called once at startup before
+/// Tauri initializes.
+///
+/// Always succeeds in practice; the `None` fallback (standard profile
+/// directories) only triggers if the executable's directory cannot be
+/// resolved or `Data/` cannot be created — e.g. a read-only install location.
 pub fn init() {
     let previous_hf_home = std::env::var_os("HF_HOME").map(PathBuf::from);
     let _ = PREVIOUS_HF_HOME.set(previous_hf_home);
@@ -20,67 +28,53 @@ pub fn init() {
     PORTABLE_DATA_DIR.get_or_init(|| {
         let exe_path = std::env::current_exe().ok()?;
         let exe_dir = exe_path.parent()?;
-
-        let marker_path = exe_dir.join("portable");
         let data_dir = exe_dir.join("Data");
 
-        let is_portable = if is_valid_portable_marker(&marker_path) {
-            true
-        } else if marker_path.exists() && data_dir.exists() {
-            // Migration: v0.8.0 created an empty marker file. If we find an
-            // empty/invalid marker alongside an existing Data/ dir, this is a
-            // real portable install — upgrade the marker in place.
-            eprintln!("[portable] upgrading legacy empty marker to magic string");
-            let _ = std::fs::write(&marker_path, "Handy Portable Mode");
-            true
-        } else {
-            false
-        };
+        std::fs::create_dir_all(&data_dir).ok()?;
 
-        if is_portable {
-            if !data_dir.exists() {
-                std::fs::create_dir_all(&data_dir).ok()?;
-            }
-            let hf_home = hugging_face_home(&data_dir);
-            std::env::set_var("HF_HOME", &hf_home);
-            eprintln!("[portable] data dir: {}", data_dir.display());
-            eprintln!("[portable] Hugging Face home: {}", hf_home.display());
-            Some(data_dir)
-        } else {
-            None
-        }
+        let hf_home = hugging_face_home(&data_dir);
+        std::env::set_var("HF_HOME", &hf_home);
+        eprintln!("[portable] data dir: {}", data_dir.display());
+        eprintln!("[portable] Hugging Face home: {}", hf_home.display());
+        Some(data_dir)
     });
 }
 
-/// Return the Hugging Face home configured before portable mode redirected it.
+/// Return the Hugging Face home configured before storage redirected it.
 ///
-/// Portable releases before v0.9.6 downloaded models to this location (or to
-/// hf-hub's default cache when it is `None`). Keeping it lets the model manager
-/// recognize those downloads after an upgrade without copying multi-gigabyte
-/// files. New downloads never go here, but deleting a model removes its copies
-/// here too, even though the cache may be shared with other applications.
+/// If the environment already pointed `HF_HOME` somewhere, the model manager
+/// can recognize existing downloads there without copying multi-gigabyte
+/// files. New downloads never go here, but deleting a model removes its
+/// copies here too, even though the cache may be shared with other
+/// applications.
 pub fn previous_hf_home() -> Option<&'static PathBuf> {
     PREVIOUS_HF_HOME.get().and_then(|path| path.as_ref())
 }
 
-/// Keep hf-hub downloads inside the portable data directory. hf-hub appends
-/// its own `hub` component to `HF_HOME` for model snapshots and blobs.
+/// Keep hf-hub downloads inside the data directory. hf-hub appends its own
+/// `hub` component to `HF_HOME` for model snapshots and blobs.
 fn hugging_face_home(data_dir: &Path) -> PathBuf {
     data_dir.join("huggingface")
 }
 
-/// Returns `true` if running in portable mode.
+/// Returns `true` when single-folder storage is active.
+///
+/// Always `true` unless `Data/` beside the executable could not be created;
+/// kept as a query so call sites can degrade gracefully on that fallback.
 pub fn is_portable() -> bool {
     PORTABLE_DATA_DIR.get().and_then(|v| v.as_ref()).is_some()
 }
 
-/// Get the portable data dir (if active). Does not require an AppHandle.
-/// Returns `None` when not in portable mode.
+/// Get the data dir beside the executable (if active). Does not require an
+/// AppHandle. Returns `None` only on the read-only-install fallback.
 pub fn data_dir() -> Option<&'static PathBuf> {
     PORTABLE_DATA_DIR.get().and_then(|v| v.as_ref())
 }
 
-/// Portable-aware replacement for `app.path().app_data_dir()`.
+/// Storage-aware replacement for `app.path().app_data_dir()`.
+///
+/// Resolves to `Data/` beside the executable; falls back to Tauri's profile
+/// directory only if that could not be created.
 pub fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, tauri::Error> {
     if let Some(dir) = data_dir() {
         Ok(dir.clone())
@@ -89,7 +83,7 @@ pub fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, tauri::Error> {
     }
 }
 
-/// Portable-aware replacement for `app.path().app_log_dir()`.
+/// Storage-aware replacement for `app.path().app_log_dir()`.
 pub fn app_log_dir(app: &tauri::AppHandle) -> Result<PathBuf, tauri::Error> {
     if let Some(dir) = data_dir() {
         Ok(dir.join("logs"))
@@ -98,15 +92,15 @@ pub fn app_log_dir(app: &tauri::AppHandle) -> Result<PathBuf, tauri::Error> {
     }
 }
 
-/// Resolve a relative path against the app data directory (portable-aware).
+/// Resolve a relative path against the data directory (storage-aware).
 /// Replaces `app.path().resolve(path, BaseDirectory::AppData)`.
 pub fn resolve_app_data(app: &tauri::AppHandle, relative: &str) -> Result<PathBuf, tauri::Error> {
     Ok(app_data_dir(app)?.join(relative))
 }
 
 /// Get the path to use with `tauri-plugin-store`.
-/// Returns an absolute path in portable mode (so the store plugin writes to
-/// the portable Data dir) or the original relative path otherwise.
+/// Returns an absolute path (so the store plugin writes into the app folder)
+/// or the original relative path on the read-only-install fallback.
 pub fn store_path(relative: &str) -> PathBuf {
     if let Some(dir) = data_dir() {
         dir.join(relative)
@@ -115,83 +109,38 @@ pub fn store_path(relative: &str) -> PathBuf {
     }
 }
 
-/// Check if a marker file path contains the portable magic string.
-/// Extracted for testability.
-fn is_valid_portable_marker(path: &std::path::Path) -> bool {
-    std::fs::read_to_string(path)
-        .map(|s| s.trim().starts_with("Handy Portable Mode"))
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     #[test]
-    fn test_valid_magic_string_enables_portable() {
-        let dir = std::env::temp_dir().join("handy_test_valid");
-        std::fs::create_dir_all(&dir).unwrap();
-        let marker = dir.join("portable");
-        let mut f = std::fs::File::create(&marker).unwrap();
-        write!(f, "Handy Portable Mode").unwrap();
-        assert!(is_valid_portable_marker(&marker));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_empty_file_does_not_enable_portable() {
-        let dir = std::env::temp_dir().join("handy_test_empty");
-        std::fs::create_dir_all(&dir).unwrap();
-        let marker = dir.join("portable");
-        std::fs::File::create(&marker).unwrap();
-        assert!(!is_valid_portable_marker(&marker));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_wrong_content_does_not_enable_portable() {
-        let dir = std::env::temp_dir().join("handy_test_wrong");
-        std::fs::create_dir_all(&dir).unwrap();
-        let marker = dir.join("portable");
-        let mut f = std::fs::File::create(&marker).unwrap();
-        write!(f, "some other content").unwrap();
-        assert!(!is_valid_portable_marker(&marker));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_missing_file_does_not_enable_portable() {
-        let path = std::path::Path::new("/nonexistent/portable");
-        assert!(!is_valid_portable_marker(path));
-    }
-
-    #[test]
-    fn test_legacy_empty_marker_without_data_dir_does_not_enable_portable() {
-        // Empty marker alone (scoop scenario) — no Data/ dir → not portable
-        let dir = std::env::temp_dir().join("handy_test_legacy_no_data");
-        std::fs::create_dir_all(&dir).unwrap();
-        let marker = dir.join("portable");
-        std::fs::File::create(&marker).unwrap();
-        assert!(!is_valid_portable_marker(&marker));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_magic_string_with_whitespace_enables_portable() {
-        let dir = std::env::temp_dir().join("handy_test_ws");
-        std::fs::create_dir_all(&dir).unwrap();
-        let marker = dir.join("portable");
-        let mut f = std::fs::File::create(&marker).unwrap();
-        write!(f, "  Handy Portable Mode\n").unwrap();
-        assert!(is_valid_portable_marker(&marker));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_hugging_face_home_is_inside_portable_data() {
-        let data_dir = Path::new("portable-root").join("Data");
+    fn test_hugging_face_home_is_inside_data_dir() {
+        let data_dir = Path::new("app-root").join("Data");
 
         assert_eq!(hugging_face_home(&data_dir), data_dir.join("huggingface"));
+    }
+
+    #[test]
+    fn test_init_activates_storage_beside_the_executable() {
+        // init() is process-global; call it exactly once across the test
+        // binary and assert the layout: a Data/ dir beside the test exe.
+        init();
+
+        assert!(is_portable());
+        let data_dir = data_dir().expect("data dir must resolve after init");
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .expect("test exe must have a parent dir");
+        assert_eq!(data_dir.as_path(), exe_dir.join("Data"));
+        assert!(data_dir.join("huggingface").starts_with(data_dir));
+        // HF_HOME must point inside the data dir.
+        assert_eq!(
+            std::env::var_os("HF_HOME"),
+            Some(data_dir.join("huggingface").into_os_string())
+        );
+
+        // Leave the test target directory clean.
+        std::fs::remove_dir_all(data_dir).ok();
     }
 }

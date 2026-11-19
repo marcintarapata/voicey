@@ -6,9 +6,9 @@
 # missing list and the install command, and exits without attempting a build.
 #
 # Outputs (copied into <StageDir>\dist):
-#   - Voicey_<version>_x64-setup.exe  (NSIS installer)
-#   - Voicey-portable-<version>.zip   (portable tree: unzip anywhere, run Voicey.exe)
-#   - voicey.exe                     (the raw release binary)
+#   - Voicey-portable-<version>.zip   (PRIMARY: portable folder; unzip anywhere, run Voicey.exe, no admin rights)
+#   - Voicey_<version>_x64-setup.exe  (NSIS installer; the zip's payload source)
+#   - voicey.exe                      (the raw release binary)
 #   - smoke screenshot(s)             (only with -Smoke)
 #
 # Usage:
@@ -129,6 +129,11 @@ if ($proc.ExitCode -ne 0 -or -not (Test-Path (Join-Path $portableDir "voicey.exe
     exit 7
 }
 
+# The NSIS template still writes a legacy `portable` marker file; storage is
+# unconditional now, so drop the inert marker from the shipped tree.
+$marker = Join-Path $portableDir "portable"
+if (Test-Path $marker) { Remove-Item -Force $marker }
+
 $distDir = Join-Path $StageDir "dist"
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 $zipPath = Join-Path $distDir "Voicey-portable-$version.zip"
@@ -138,9 +143,9 @@ Copy-Item -Force $nsisExe.FullName (Join-Path $distDir "Voicey_$($version)_x64-s
 Copy-Item -Force $releaseExe (Join-Path $distDir "voicey.exe")
 
 Write-Output "VOICEY-BUILD: artifacts"
-Write-Output "  portable zip: $zipPath"
-Write-Output "  installer:    $(Join-Path $distDir "Voicey_$($version)_x64-setup.exe")"
-Write-Output "  binary:      $(Join-Path $distDir "voicey.exe")"
+Write-Output "  PRIMARY portable zip: $zipPath"
+Write-Output "  installer:               $(Join-Path $distDir "Voicey_$($version)_x64-setup.exe")"
+Write-Output "  binary:                  $(Join-Path $distDir "voicey.exe")"
 
 # ---------------------------------------------------------------------------
 # 4. Optional smoke run: launch the portable app, reveal the window by
@@ -163,6 +168,18 @@ if ($Smoke) {
     $bmp.Save($shot, [System.Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose(); $bmp.Dispose()
     Write-Output "VOICEY-BUILD: smoke screenshot: $shot"
+
+    # Verify single-folder storage: Data/ must appear beside the exe with
+    # the settings store inside it (first-run model download targets
+    # Data/models via HF_HOME; a full download is not exercised here).
+    $smokeData = Join-Path $portableDir "Data"
+    $smokeStore = Join-Path $smokeData "settings_store.json"
+    if (Test-Path $smokeStore) {
+        Write-Output "VOICEY-BUILD: smoke storage OK: $smokeStore exists"
+    } else {
+        Write-Output "VOICEY-BUILD: smoke storage MISSING: $smokeStore not found (Data dir: $(Test-Path $smokeData))"
+    }
+
     Stop-Process -Name "voicey" -Force -ErrorAction SilentlyContinue
     Wait-Process -Name "voicey" -Timeout 10 -ErrorAction SilentlyContinue
 }

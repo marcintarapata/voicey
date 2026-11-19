@@ -18,6 +18,49 @@ removed, English-only UI, near-black fixed dark theme with a single red
 recording accent, minimal recording pill overlay. All 76 catalog models and
 all settings remain functional.
 
+Phase 1 — collapse to defaults: Parakeet v3 (`parakeet-tdt-0.6b-v3`, Q8_0)
+pinned as the only dictation model, auto-downloaded on first run; the model
+picker and every non-essential setting removed (exactly two controls remain:
+shortcut + microphone).
+
+Phase 2 — one-package portable mode: single-folder storage is the only mode
+(see below) and the Windows build's primary artifact is the portable zip.
+
+## Single-folder storage (the only mode)
+
+Voicey keeps everything next to its executable — there is no profile-folder
+mode and nothing is written to `%APPDATA%`. On startup the app creates a
+`Data/` directory beside `Voicey.exe` (or beside the dev binary) and stores:
+
+```
+Data/
+├── settings_store.json   # the two settings (shortcut, microphone)
+├── models/                # model files (mirror-fallback downloads, manual drop-ins)
+├── huggingface/hub/       # first-run Parakeet download lands here (HF_HOME)
+├── history.db             # local transcription history
+├── logs/
+└── webview/               # WebView UI cache
+```
+
+Unzip the portable zip anywhere (no admin rights needed), run `Voicey.exe`,
+and the first run downloads Parakeet straight into that `Data/` folder —
+never into a user-profile cache.
+
+### Updating without losing anything
+
+The zip contains only program files — it never contains a `Data/` folder —
+so an update is a folder replace:
+
+1. Quit Voicey (tray → quit).
+2. Extract the new `Voicey-portable-<version>.zip` **over your existing
+   Voicey folder** (or extract it to a fresh folder and copy your old `Data/`
+   into it).
+3. Run `Voicey.exe` again. Your shortcut, microphone, downloaded models,
+   and history are exactly where they were.
+
+Do not delete `Data/`; it is the only copy of your settings, models, and
+history.
+
 ## Development
 
 Requires [Rust](https://rustup.rs/) and [Bun](https://bun.sh/); see
