@@ -79,5 +79,8 @@
         "installerIcon": "icons/icon.ico"
       }
     }
+  },
+  "plugins": {
+    "updater": {}
   }
 }
