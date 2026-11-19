@@ -36,48 +36,48 @@ function Test-Command([string]$Name) {
 
 # Bun (package manager; also runs vite build + the tauri CLI)
 if (-not (Test-Command "bun")) {
-    $missing.Add("bun (package manager) — install: powershell -c `"irm bun.sh/install.ps1 | iex`" (or: npm install -g bun)")
+    $missing.Add("bun (package manager) -- install: powershell -c `"irm bun.sh/install.ps1 | iex`" (or: npm install -g bun)")
 }
 
 # Rust (cargo/rustc, msvc host toolchain)
 if (-not (Test-Command "cargo")) {
-    $missing.Add("cargo/rustc (Rust, x86_64-pc-windows-msvc) — install: winget install Rustlang.Rustup ; rustup default stable-x86_64-pc-windows-msvc")
+    $missing.Add("cargo/rustc (Rust, x86_64-pc-windows-msvc) -- install: winget install Rustlang.Rustup ; rustup default stable-x86_64-pc-windows-msvc")
 }
 
-# MSVC C++ build tools (link.exe) — required by the Rust msvc target
+# MSVC C++ build tools (link.exe) -- required by the Rust msvc target
 $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 $msvcOk = $false
 if (Test-Path $vswhere) {
-    $msvc = & $vswhere -products "*" -latest -find "VC/Tools/MSVC/*/bin/Hostx64/x64/link.exe" 2>$null | Select-Object -First 1
+    $msvc = & $vswhere -products "*" -all -find "VC/Tools/MSVC/*/bin/Hostx64/x64/link.exe" 2>$null | Select-Object -First 1
     if ($msvc) { $msvcOk = $true }
 }
 if (-not $msvcOk) {
-    $missing.Add("MSVC C++ Build Tools (link.exe) — install: winget install Microsoft.VisualStudio.2022.BuildTools --override `"--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --passive`"")
+    $missing.Add("MSVC C++ Build Tools (link.exe) -- install: winget install Microsoft.VisualStudio.2022.BuildTools --override `"--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --passive`"")
 }
 
-# CMake — required by the transcribe-cpp build
+# CMake -- required by the transcribe-cpp build
 if (-not (Test-Command "cmake")) {
-    $missing.Add("cmake — install: winget install Kitware.CMake")
+    $missing.Add("cmake -- install: winget install Kitware.CMake")
 }
 
-# glslc — required by ggml's vulkan-shaders-gen (ships with the Vulkan SDK)
+# glslc -- required by ggml's vulkan-shaders-gen (ships with the Vulkan SDK)
 $glslc = Get-Command "glslc" -ErrorAction SilentlyContinue
 if (-not $glslc -and $env:VULKAN_SDK) {
     $glslcPath = Join-Path $env:VULKAN_SDK "Bin\glslc.exe"
     if (Test-Path $glslcPath) { $glslc = $true }
 }
 if (-not $glslc) {
-    $missing.Add("glslc / Vulkan SDK (Vulkan backend shader compilation) — install: winget install KhronosGroup.VulkanSDK (then open a new terminal)")
+    $missing.Add("glslc / Vulkan SDK (Vulkan backend shader compilation) -- install: winget install KhronosGroup.VulkanSDK (then open a new terminal)")
 }
 
-# WebView2 runtime — the app's UI host
+# WebView2 runtime -- the app's UI host
 $webview2 = Test-Path "C:\Program Files (x86)\Microsoft\EdgeWebView\Application"
 if (-not $webview2) {
     $reg = Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9FC7492}" -ErrorAction SilentlyContinue
     if ($reg -and $reg.pb) { $webview2 = $true }
 }
 if (-not $webview2) {
-    $missing.Add("Microsoft Edge WebView2 Runtime — install: winget install Microsoft.EdgeWebView2Runtime")
+    $missing.Add("Microsoft Edge WebView2 Runtime -- install: winget install Microsoft.EdgeWebView2Runtime")
 }
 
 if ($missing.Count -gt 0) {

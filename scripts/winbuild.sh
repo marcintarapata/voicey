@@ -52,9 +52,11 @@ fi
 WUNC='\\wsl.localhost\'"$DISTRO""${REPO_ROOT//\//\\}"
 echo "== Staging checkout -> $STAGE (robocopy, excluding build outputs)"
 
-# Robocopy exit codes 0-7 are success (1 = files copied).
+# Robocopy exit codes 0-7 are success (1 = files copied). Paths contain no
+# spaces, so the command needs no quoting (WSL interop mangles embedded
+# quotes passed through cmd /c).
 set +e
-"$CMD_EXE" /c "robocopy \"$WUNC\" \"$STAGE\" /MIR /NFL /NDL /NJH /NP /xd node_modules dist .git src-tauri\\target"
+"$CMD_EXE" /c "robocopy $WUNC $STAGE /MIR /NFL /NDL /NJH /NP /xd node_modules dist .git src-tauri\\target"
 rc=$?
 set -e
 if [ "$rc" -ge 8 ]; then
