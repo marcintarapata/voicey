@@ -451,7 +451,7 @@ const RecordingOverlay: React.FC = () => {
           ? noticeRow
           : working
             ? workingRow(workLabel, true)
-            : listeningRow(false, true)}
+            : listeningRow(true, true)}
       </div>
     </div>
   );

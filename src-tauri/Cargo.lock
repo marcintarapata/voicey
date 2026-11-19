@@ -2459,7 +2459,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "handy"
+name = "voicey"
 version = "0.10.1"
 dependencies = [
  "anyhow",

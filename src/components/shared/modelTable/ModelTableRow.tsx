@@ -109,7 +109,7 @@ export const ModelTableRow: React.FC<ModelTableRowProps> = ({
     line ??
     (download ? (
       download.state === "checking" ? (
-        t("onboarding.download.checking")
+        t("models.downloadChecking")
       ) : (
         <span className="tabular-nums">
           {t("modelTable.downloadingLine", {
@@ -174,9 +174,7 @@ export const ModelTableRow: React.FC<ModelTableRowProps> = ({
             <Tag {...vt?.("r")}>{t(`modelTable.roles.${ROLE_KEYS[role]}`)}</Tag>
           )}
           {entry.kind === "custom" && <Tag>{t("modelSelector.custom")}</Tag>}
-          {entry.kind === "legacy" && (
-            <Tag>{t("onboarding.migration.oldFormat")}</Tag>
-          )}
+          {entry.kind === "legacy" && <Tag>{t("models.oldFormat")}</Tag>}
           {capabilities.length > 0 && (
             <span className="inline-flex shrink-0 items-center text-ink-3">
               {capabilities.map(capability)}
