@@ -411,6 +411,9 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
     if (!retrying) setCancelling(false);
   }, [retrying]);
   const hasTranscription = entry.transcription_text.trim().length > 0;
+  // Voicey dictations keep their text only (audio is never written to disk);
+  // file-drop entries and pre-Voicey recordings still point at a WAV.
+  const hasAudio = entry.file_name.length > 0;
   const folded = hasTranscription && !retrying && !expanded;
 
   // Offer "Show more" only when the folded text is actually cut off.
@@ -517,14 +520,14 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
             >
               <X width={16} height={16} />
             </IconButton>
-          ) : (
+          ) : hasAudio ? (
             <IconButton
               onClick={() => retryTranscription(entry.id)}
               title={t("settings.history.retranscribe")}
             >
               <RotateCcw width={16} height={16} />
             </IconButton>
-          )}
+          ) : null}
           <IconButton
             onClick={handleDeleteEntry}
             title={t("settings.history.delete")}
@@ -580,7 +583,9 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
         )}
       </div>
 
-      <AudioPlayer onLoadRequest={handleLoadAudio} className="w-full" />
+      {hasAudio && (
+        <AudioPlayer onLoadRequest={handleLoadAudio} className="w-full" />
+      )}
     </div>
   );
 };

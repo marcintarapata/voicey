@@ -114,19 +114,18 @@ Handy is a cross-platform desktop speech-to-text application built with Tauri 2.
 ### Application Flow
 
 1. **Initialization:** App starts minimized to tray, loads settings, initializes managers
-2. **Model Setup:** First-run downloads preferred Whisper model (Small/Medium/Turbo/Large)
+2. **Model Setup:** First-run auto-downloads the pinned Parakeet model (`parakeet-tdt-0.6b-v3`, Q8_0); the settings window shows the progress
 3. **Recording:** Global shortcut triggers audio recording with VAD filtering
-4. **Processing:** Audio sent to Whisper model for transcription
+4. **Processing:** Audio sent to the Parakeet model for transcription
 5. **Output:** Text pasted to active application via system clipboard
 
 ### Settings System
 
-Settings are stored using Tauri's store plugin with reactive updates:
+Settings are stored using Tauri's store plugin with reactive updates. Voicey's settings surface is exactly two controls; everything else is a settled default with no UI:
 
-- Keyboard shortcuts (configurable, supports push-to-talk)
-- Audio devices (microphone/output selection)
-- Model preferences (Small/Medium/Turbo/Large Whisper variants)
-- Audio feedback and translation options
+- Keyboard shortcut (the dictation binding; activation is fixed to hold-or-toggle, Escape cancels)
+- Audio device (microphone selection)
+- Dictation model is pinned to Parakeet (auto-downloaded, no picker); VAD, chunking, overlay style, paste behavior, theme, and output are fixed defaults
 
 ### Single Instance Architecture
 

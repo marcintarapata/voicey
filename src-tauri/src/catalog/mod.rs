@@ -493,6 +493,20 @@ mod tests {
     }
 
     #[test]
+    fn pinned_model_is_offered_by_the_catalog() {
+        // Voicey pins dictation to exactly one model; if a catalog sync
+        // renames the repo, the file, or the default quant, this fails
+        // before the app ships a pin that can never download.
+        assert!(
+            CATALOG
+                .iter()
+                .any(|m| m.id == crate::settings::PINNED_MODEL_ID),
+            "pinned model {} is missing from the catalog",
+            crate::settings::PINNED_MODEL_ID
+        );
+    }
+
+    #[test]
     fn ids_are_unique() {
         let mut ids: Vec<&str> = CATALOG.iter().map(|d| d.id.as_str()).collect();
         ids.sort_unstable();

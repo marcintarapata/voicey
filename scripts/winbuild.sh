@@ -86,7 +86,9 @@ win_part="${STAGE#*:}"        # "\Users\...\voicey-build"
 stage_wsl="/mnt/c${win_part//\\//}"
 dist_wsl="$stage_wsl/dist"
 if [ -d "$dist_wsl" ]; then
-  out_dir="/home/marcin/firstmate/data/voicey-phase0/artifacts"
+  # Task-specific proof location; overridable so other phases/lanes can keep
+  # their artifacts separate.
+  out_dir="${VOICEY_ARTIFACTS_OUT:-/home/marcin/firstmate/data/voicey-phase0/artifacts}"
   mkdir -p "$out_dir"
   cp -v "$dist_wsl"/* "$out_dir"/ 2>/dev/null || true
   echo "== Artifacts copied to $out_dir"

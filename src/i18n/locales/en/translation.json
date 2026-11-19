@@ -4,13 +4,9 @@
     "checkUpdates": "Check for Updates...",
     "copyLastTranscript": "Copy Last Transcript",
     "unloadModel": "Unload Model",
-    "model": "Model",
     "quit": "Quit",
     "cancel": "Cancel",
-    "secureInputWarning": "⚠ Shortcuts blocked by Secure Input",
-    "language": "Language",
-    "autoLanguage": "Auto",
-    "otherLanguages": "Other Languages"
+    "secureInputWarning": "⚠ Shortcuts blocked by Secure Input"
   },
   "sidebar": {
     "general": "General",
@@ -701,7 +697,7 @@
     "recordingFailedTitle": "Failed to Start Recording",
     "modelLoadFailed": "Voicey couldn't load this model. Try again or choose a different one.",
     "modelLoadFailedTitle": "Failed to Load Model",
-    "noModelSelected": "Download or select a model in Settings > Models.",
+    "noModelSelected": "Voicey is still downloading its speech model. Wait for the first-run download to finish, then dictate again.",
     "noModelSelectedTitle": "No Model Selected",
     "modelDownloadFailed": "Download failed",
     "pasteFailedTitle": "Failed to Paste Text",
@@ -766,5 +762,25 @@
     "customModelDescription": "Not officially supported",
     "downloadChecking": "Checking the download…",
     "oldFormat": "Old format"
+  },
+  "downloads": {
+    "downloading": "Downloading…",
+    "downloadingMultiple": "Downloading {{count}}…",
+    "speed": "{{speed}} MB/s"
+  },
+  "firstRun": {
+    "title": "Set up Voicey",
+    "subtitle": "One model download and a working microphone — nothing else to configure.",
+    "micTitle": "Microphone",
+    "micReady": "Microphone access is allowed.",
+    "micWillPrompt": "Your system will ask for microphone access the first time you dictate.",
+    "micDenied": "Microphone access is turned off for Voicey. Allow desktop apps to use the microphone in your system's privacy settings, then check again.",
+    "micOpenSettings": "Open privacy settings",
+    "micCheckAgain": "Check again",
+    "modelTitle": "Speech model",
+    "modelReady": "Parakeet is downloaded and ready.",
+    "modelDescription": "Voicey dictates with one model: Parakeet. It downloads once (about 740 MB) and never leaves this computer.",
+    "downloadFailed": "The download didn't finish. Check your connection and try again.",
+    "retryDownload": "Retry download"
   }
 }

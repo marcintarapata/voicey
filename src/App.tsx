@@ -10,20 +10,20 @@ import { useTranslation } from "react-i18next";
 import "./App.css";
 import SecureInputWarning from "./components/SecureInputWarning";
 import Footer from "./components/footer";
-import { DebugSettings, ModelsSettings } from "./components/settings";
+import { DebugSettings } from "./components/settings";
+import { FirstRunSetup } from "./components/settings/FirstRunSetup";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FileDropOverlay } from "./components/FileDropOverlay";
 import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
+import { useModelStore } from "./stores/modelStore";
 import { commands } from "@/bindings";
 import { NoticePanel } from "@/components/notices/NoticePanel";
+import { PINNED_MODEL_ID } from "@/lib/pinnedModel";
 import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 
 const renderSettingsContent = (section: SidebarSection) => {
-  if (section === "models") {
-    return <ModelsSettings />;
-  }
   if (section === "debug") {
     return <DebugSettings />;
   }
@@ -40,6 +40,12 @@ function App() {
   const showHistory = useCallback(() => setCurrentSection("history"), []);
   const { settings, updateSetting } = useSettings();
   const direction = getLanguageDirection(i18n.language);
+  const models = useModelStore((state) => state.models);
+  const modelsLoading = useModelStore((state) => state.loading);
+  // First run lasts exactly as long as the pinned Parakeet download.
+  const parakeet = models.find((model) => model.id === PINNED_MODEL_ID);
+  const firstRun =
+    !modelsLoading && parakeet !== undefined && !parakeet.is_downloaded;
   const refreshAudioDevices = useSettingsStore(
     (state) => state.refreshAudioDevices,
   );
@@ -127,12 +133,13 @@ function App() {
         {/* Scrollable content area */}
         <div className="flex-1 flex flex-col overflow-hidden">
           <div ref={settingsScrollRef} className="flex-1 overflow-y-auto">
-            {/* Models fills the window: its table scrolls, not the page. */}
-            <div
-              className={`flex flex-col items-center p-4 gap-4 ${currentSection === "models" ? "h-full" : ""}`}
-            >
+            <div className="flex flex-col items-center p-4 gap-4">
               <SecureInputWarning />
-              {renderSettingsContent(currentSection)}
+              {firstRun ? (
+                <FirstRunSetup />
+              ) : (
+                renderSettingsContent(currentSection)
+              )}
             </div>
           </div>
         </div>

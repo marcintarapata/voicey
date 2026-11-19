@@ -54,23 +54,24 @@ mod tests {
 
     #[test]
     fn resolves_locale_fallbacks() {
-        for (locale, expected) in [
-            ("zh-Hant-TW", "zh-TW"),
-            ("zh-Hant-HK", "zh-TW"),
-            ("zh-HK", "zh-TW"),
-            ("zh-MO", "zh-TW"),
-            ("ZH-TW", "zh-TW"),
-            ("zh_Hant_TW", "zh-TW"),
-            ("zh-Hans-CN", "zh"),
-            ("yue-Hant-HK", "zh-TW"),
-            ("yue-Hans-CN", "zh"),
-            ("fr-FR", "fr"),
-            ("xx-YY", "en"),
+        // Voicey ships English only, so every locale must resolve to the
+        // English strings through the same exact-match → language-code → en
+        // chain the multi-locale builds used. The chain itself stays intact
+        // for a future second locale.
+        for locale in [
+            "en",
+            "EN-US",
+            "en_us",
+            "zh-Hant-TW",
+            "zh-Hans-CN",
+            "yue-Hant-HK",
+            "fr-FR",
+            "xx-YY",
         ] {
             assert_eq!(
                 format!("{:?}", get_tray_translations(Some(locale.into()))),
-                format!("{:?}", TRANSLATIONS[expected]),
-                "{locale} should resolve to {expected}"
+                format!("{:?}", TRANSLATIONS["en"]),
+                "{locale} should resolve to en"
             );
         }
     }

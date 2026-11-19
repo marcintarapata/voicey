@@ -499,7 +499,7 @@ pub struct AppSettings {
     pub post_process_selected_prompt_id: Option<String>,
     #[serde(default)]
     pub mute_while_recording: bool,
-    #[serde(default)]
+    #[serde(default = "default_append_trailing_space")]
     pub append_trailing_space: bool,
     #[serde(default = "default_app_language")]
     pub app_language: String,
@@ -575,10 +575,19 @@ pub struct AppSettings {
 }
 
 fn default_model() -> String {
-    "".to_string()
+    // Voicey pins dictation to exactly one model: Parakeet TDT 0.6B v3
+    // (Q8_0, from the pinned handy-computer repo). It auto-detects the
+    // spoken language natively, so no language-detector download is needed.
+    PINNED_MODEL_ID.to_string()
 }
 
-const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 3;
+/// The only dictation model Voicey ships and auto-downloads on first run.
+/// This is the *registry* id (`{repo}/{filename}`, the same form every model
+/// id in the app takes), not the catalog's short name.
+pub const PINNED_MODEL_ID: &str =
+    "handy-computer/parakeet-tdt-0.6b-v3-gguf/parakeet-tdt-0.6b-v3-Q8_0.gguf";
+
+const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 4;
 
 fn default_settings_schema_version() -> u32 {
     CURRENT_SETTINGS_SCHEMA_VERSION
@@ -627,12 +636,9 @@ fn default_overlay_position() -> OverlayPosition {
 }
 
 fn default_overlay_style() -> OverlayStyle {
-    // Linux hides the overlay by default; other platforms show the live overlay.
-    // Position is independent and only selects top vs. bottom placement.
-    #[cfg(target_os = "linux")]
-    return OverlayStyle::None;
-    #[cfg(not(target_os = "linux"))]
-    return OverlayStyle::Live;
+    // Voicey always shows the minimal pill; the live overlay and the Linux
+    // hide-by-default exception were Handy-era choices.
+    OverlayStyle::Minimal
 }
 
 fn default_vad_enabled() -> bool {
@@ -648,7 +654,8 @@ fn default_language_detection_window_secs() -> u32 {
 }
 
 fn default_filler_word_removal_enabled() -> bool {
-    true
+    // Voicey captures dictation as-is: filler words stay in the transcript.
+    false
 }
 
 fn default_chinese_script() -> ChineseScript {
@@ -684,6 +691,11 @@ fn default_paste_delay_after_ms() -> u64 {
     return 500;
     #[cfg(not(target_os = "linux"))]
     return 60;
+}
+
+fn default_append_trailing_space() -> bool {
+    // Voicey pastes with a trailing space so the cursor lands ready to type.
+    true
 }
 
 fn default_auto_submit() -> bool {
@@ -1021,7 +1033,7 @@ pub fn get_default_settings() -> AppSettings {
         update_checks_enabled: default_update_checks_enabled(),
         show_whats_new_on_update: default_show_whats_new_on_update(),
         whats_new_last_seen_version: default_whats_new_last_seen_version(),
-        selected_model: "".to_string(),
+        selected_model: default_model(),
         onboarding_completed: false,
         always_on_microphone: false,
         spoken_languages: Vec::new(),
@@ -1051,7 +1063,7 @@ pub fn get_default_settings() -> AppSettings {
         post_process_prompts: default_post_process_prompts(),
         post_process_selected_prompt_id: None,
         mute_while_recording: false,
-        append_trailing_space: false,
+        append_trailing_space: default_append_trailing_space(),
         app_language: default_app_language(),
         theme: default_theme(),
         experimental_enabled: false,
@@ -1355,9 +1367,10 @@ fn apply_settings_migrations(
 
     // One-time overlay migration (only while the new key is absent): the retired
     // overlay_position `none` meant "hide the overlay" → OverlayStyle::None; any
-    // other position had it visible → Live. The position enum no longer has a
-    // `none` variant (legacy "none" deserializes to Bottom via a serde alias), so
-    // read the raw stored string to recover the old intent.
+    // other position had it visible → Minimal (Voicey's fixed pill; Live was a
+    // Handy-era choice). The position enum no longer has a `none` variant
+    // (legacy "none" deserializes to Bottom via a serde alias), so read the raw
+    // stored string to recover the old intent.
     if settings_value.get("overlay_style").is_none() {
         let was_hidden = settings_value
             .get("overlay_position")
@@ -1366,8 +1379,19 @@ fn apply_settings_migrations(
         settings.overlay_style = if was_hidden {
             OverlayStyle::None
         } else {
-            OverlayStyle::Live
+            OverlayStyle::Minimal
         };
+        updated = true;
+    }
+
+    if stored_schema_version < 4 {
+        // Schema 4 is the Voicey collapse to defaults: dictation is pinned to
+        // exactly one model (Parakeet, auto-downloaded on first run) and the
+        // picker-era onboarding flag no longer gates anything — the first-run
+        // download panel replaces it.
+        settings.selected_model = default_model();
+        settings.onboarding_completed = true;
+        settings.settings_schema_version = CURRENT_SETTINGS_SCHEMA_VERSION;
         updated = true;
     }
 
@@ -1554,7 +1578,10 @@ mod tests {
         );
         assert_eq!(settings.hold_threshold_ms, default_hold_threshold_ms());
         assert!(!settings.audio_feedback);
-        assert!(settings.filler_word_removal_enabled);
+        // Voicey's collapsed defaults: dictation as-is, Parakeet pinned.
+        assert!(!settings.filler_word_removal_enabled);
+        assert_eq!(settings.selected_model, PINNED_MODEL_ID);
+        assert!(settings.append_trailing_space);
         // Bindings default to empty; the load path merges the real defaults in.
         assert!(settings.bindings.is_empty());
     }
@@ -1673,7 +1700,9 @@ mod tests {
         assert_eq!(settings.bindings["transcribe"].current_binding, "f13");
         assert_eq!(settings.log_level, LogLevel::Debug);
         assert_eq!(settings.sound_theme, SoundTheme::Pop);
-        assert!(settings.filler_word_removal_enabled);
+        // No filler key in this store: the Voicey default (dictation as-is)
+        // applies, not Handy's old on-by-default cleanup.
+        assert!(!settings.filler_word_removal_enabled);
         assert_eq!(settings.vad_backend, VadBackend::Silero);
         assert!(
             settings.long_form_chunking,
@@ -1695,6 +1724,10 @@ mod tests {
         // matching legacy mode rather than the new hold-or-toggle default.
         assert_eq!(settings.shortcut_activation, ShortcutActivation::Toggle);
         assert_eq!(settings.transcribe_gpu_device, None);
+        // Schema 4 (the Voicey collapse) pins dictation to Parakeet: the
+        // stored whisper selection can no longer be reached, so migration
+        // replaces it and the first-run download fetches the pinned model.
+        assert_eq!(settings.selected_model, default_model());
     }
 
     #[test]
@@ -1817,11 +1850,17 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "linux"))]
+    /// The Phase 1 collapse: the ratified defaults are baked in, not chosen.
     #[test]
-    fn default_overlay_style_is_live_when_overlay_defaults_on() {
+    fn default_settings_are_collapsed_to_voicey_defaults() {
         let settings = get_default_settings();
-        assert_eq!(settings.overlay_style, OverlayStyle::Live);
+        assert_eq!(settings.selected_model, PINNED_MODEL_ID);
+        assert!(!settings.filler_word_removal_enabled);
+        assert!(settings.vad_enabled);
+        assert!(settings.long_form_chunking);
+        assert!(settings.append_trailing_space);
+        assert_eq!(settings.overlay_style, OverlayStyle::Minimal);
+        assert!(!settings.auto_submit);
     }
 
     #[test]
@@ -1850,10 +1889,10 @@ mod tests {
     }
 
     #[test]
-    fn overlay_migration_promotes_enabled_overlay_to_live() {
+    fn overlay_migration_promotes_enabled_overlay_to_minimal() {
         let mut settings = get_default_settings();
         settings.overlay_position = OverlayPosition::Top;
-        settings.overlay_style = OverlayStyle::Minimal;
+        settings.overlay_style = OverlayStyle::Live;
 
         let raw = serde_json::json!({
             "selected_model": "",
@@ -1861,7 +1900,7 @@ mod tests {
         });
 
         assert!(apply_settings_migrations(&mut settings, &raw));
-        assert_eq!(settings.overlay_style, OverlayStyle::Live);
+        assert_eq!(settings.overlay_style, OverlayStyle::Minimal);
         assert_eq!(settings.overlay_position, OverlayPosition::Top);
     }
 

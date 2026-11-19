@@ -772,46 +772,11 @@ impl ShortcutAction for TranscribeAction {
                     tm.cancel_stream();
                     finish_without_text(&ah, input_silent, 0, stop_time);
                 } else {
-                    // Save WAV concurrently with transcription
+                    // Voicey never writes dictation audio to disk: the
+                    // samples stay in memory and only the text is kept.
                     let sample_count = samples.len();
-                    let file_name = format!("handy-{}.wav", chrono::Utc::now().timestamp());
-                    let wav_path = hm.recordings_dir().join(&file_name);
-                    let wav_path_for_verify = wav_path.clone();
-                    let samples_for_wav = samples.clone();
-                    let wav_handle = tauri::async_runtime::spawn_blocking(move || {
-                        crate::audio_toolkit::save_wav_file(&wav_path, &samples_for_wav)
-                    });
-
-                    // Transcribe concurrently with WAV save: the live decode's
-                    // result when it has one (all audio was already fed to it),
-                    // otherwise a batch run of the samples. A cancel is surfaced
-                    // as an error, so it never starts a batch run.
                     let transcription_time = Instant::now();
                     let transcription_result = tm.transcribe_recording(samples);
-
-                    // Await WAV save and verify
-                    let wav_saved = match wav_handle.await {
-                        Ok(Ok(())) => {
-                            match crate::audio_toolkit::verify_wav_file(
-                                &wav_path_for_verify,
-                                sample_count,
-                            ) {
-                                Ok(()) => true,
-                                Err(e) => {
-                                    error!("WAV verification failed: {}", e);
-                                    false
-                                }
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            error!("Failed to save WAV file: {}", e);
-                            false
-                        }
-                        Err(e) => {
-                            error!("WAV save task panicked: {}", e);
-                            false
-                        }
-                    };
 
                     if rm.was_cancelled_since(cancel_generation) {
                         debug!("Transcription operation cancelled before output handling");
@@ -857,18 +822,17 @@ impl ShortcutAction for TranscribeAction {
                                 return;
                             }
 
-                            // Save to history if WAV was saved
-                            if wav_saved {
-                                if let Err(err) = hm.save_entry(
-                                    file_name,
-                                    transcription,
-                                    post_process,
-                                    processed.post_processed_text.clone(),
-                                    processed.post_process_prompt.clone(),
-                                    language,
-                                ) {
-                                    error!("Failed to save history entry: {}", err);
-                                }
+                            // Save the transcript to history. Voicey keeps no
+                            // audio, so the entry has no recording to point at.
+                            if let Err(err) = hm.save_entry(
+                                String::new(),
+                                transcription,
+                                post_process,
+                                processed.post_processed_text.clone(),
+                                processed.post_process_prompt.clone(),
+                                language,
+                            ) {
+                                error!("Failed to save history entry: {}", err);
                             }
 
                             // The user's hook only changes what gets pasted;
@@ -1009,17 +973,16 @@ impl ShortcutAction for TranscribeAction {
                                 .with_detail(err.to_string()),
                             );
                             // Save entry with empty text so user can retry
-                            if wav_saved {
-                                if let Err(save_err) = hm.save_entry(
-                                    file_name,
-                                    String::new(),
-                                    post_process,
-                                    None,
-                                    None,
-                                    None,
-                                ) {
-                                    error!("Failed to save failed history entry: {}", save_err);
-                                }
+                            // (text-only; Voicey keeps no dictation audio).
+                            if let Err(save_err) = hm.save_entry(
+                                String::new(),
+                                String::new(),
+                                post_process,
+                                None,
+                                None,
+                                None,
+                            ) {
+                                error!("Failed to save failed history entry: {}", save_err);
                             }
                             set_tray_state(&ah, TrayIconState::Idle);
                             emit_transcription_complete(

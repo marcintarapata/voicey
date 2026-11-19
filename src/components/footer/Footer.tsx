@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 
-import ModelSelector from "../model-selector";
 import NoticeChip from "./NoticeChip";
 import TranscriptionStatus from "./TranscriptionStatus";
 
@@ -30,7 +29,6 @@ const Footer: React.FC<FooterProps> = ({ onShowHistory }) => {
     <div className="w-full border-t border-line pt-3">
       <div className="flex justify-between items-center text-xs px-4 pb-3 text-ink-2">
         <div className="flex items-center gap-4">
-          <ModelSelector />
           <TranscriptionStatus onShowHistory={onShowHistory} />
         </div>
 

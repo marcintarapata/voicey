@@ -1450,8 +1450,13 @@ impl ModelManager {
 
         // A model cannot remain selected after its files disappear. Catalog
         // entries stay in the registry so they can be downloaded again, so
-        // checking only whether the id exists is not sufficient.
-        if !settings.selected_model.is_empty() {
+        // checking only whether the id exists is not sufficient. The pinned
+        // model is the exception: Voicey has no picker, so the pin survives a
+        // missing download — the first-run path re-downloads it instead of
+        // clearing the only selection the UI can never restore.
+        if !settings.selected_model.is_empty()
+            && settings.selected_model != crate::settings::PINNED_MODEL_ID
+        {
             let is_available = {
                 let models = self.available_models.lock().unwrap();
                 Self::selected_model_is_available(&models, &settings.selected_model)

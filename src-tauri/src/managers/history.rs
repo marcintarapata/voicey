@@ -275,12 +275,9 @@ impl HistoryManager {
         })
     }
 
-    pub fn recordings_dir(&self) -> &std::path::Path {
-        &self.recordings_dir
-    }
-
-    /// Save a new history entry to the database.
-    /// The WAV file should already have been written to the recordings directory.
+    /// Save a new history entry to the database. Voicey never writes
+    /// dictation audio to disk, so `file_name` is empty for dictated entries;
+    /// file-drop entries pass the name of the user-provided audio file.
     pub fn save_entry(
         &self,
         file_name: String,
@@ -467,14 +464,18 @@ impl HistoryManager {
                 params![id],
             )?;
 
-            // Delete WAV file
-            let file_path = self.recordings_dir.join(file_name);
-            if file_path.exists() {
-                if let Err(e) = fs::remove_file(&file_path) {
-                    error!("Failed to delete WAV file {}: {}", file_name, e);
-                } else {
-                    debug!("Deleted old WAV file: {}", file_name);
-                    deleted_count += 1;
+            // Delete the recording. Text-only entries (Voicey dictations,
+            // which never write audio) have an empty file_name; joining one
+            // would target the recordings directory itself.
+            if !file_name.is_empty() {
+                let file_path = self.recordings_dir.join(file_name);
+                if file_path.exists() {
+                    if let Err(e) = fs::remove_file(&file_path) {
+                        error!("Failed to delete WAV file {}: {}", file_name, e);
+                    } else {
+                        debug!("Deleted old WAV file: {}", file_name);
+                        deleted_count += 1;
+                    }
                 }
             }
         }

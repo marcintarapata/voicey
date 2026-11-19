@@ -13,7 +13,6 @@ pub mod engine_supervisor;
 mod helpers;
 mod input;
 mod language_detection;
-mod languages;
 mod llm_client;
 mod managers;
 mod memory;
@@ -228,6 +227,12 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(tray::TrayState::new());
     app_handle.manage(TranscriptionJobManager::new(app_handle));
 
+    // Voicey ships exactly one dictation model (the pinned Parakeet). If it is
+    // not on disk yet — a fresh install, or a deleted model — download it
+    // automatically right away. The settings window's first-run panel and the
+    // footer track the same `model-download-*` events this emits.
+    ensure_pinned_model_available(app_handle);
+
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command
     // after permissions are confirmed (on macOS) or after onboarding completes.
@@ -336,36 +341,6 @@ fn initialize_core_logic(app_handle: &AppHandle) {
             "quit" => {
                 app.exit(0);
             }
-            id if id.starts_with("model_select:") => {
-                let model_id = id.strip_prefix("model_select:").unwrap().to_string();
-                let current_model = settings::get_settings(app).selected_model;
-                if model_id == current_model {
-                    return;
-                }
-                let app_clone = app.clone();
-                std::thread::spawn(move || {
-                    match commands::models::switch_active_model(&app_clone, &model_id) {
-                        Ok(()) => {
-                            log::info!("Model switched to {} via tray.", model_id);
-                        }
-                        Err(e) => {
-                            log::error!("Failed to switch model via tray: {}", e);
-                        }
-                    }
-                    tray::update_tray_menu(&app_clone);
-                });
-            }
-            id if id.starts_with("language_select:") => {
-                let language = id.strip_prefix("language_select:").unwrap().to_string();
-                if let Err(e) =
-                    shortcut::change_selected_language_setting(app.clone(), language.clone())
-                {
-                    log::error!("Failed to switch language via tray: {}", e);
-                    return;
-                }
-                log::info!("Language switched to {} via tray.", language);
-                tray::rebuild_tray_menu(app);
-            }
             _ => {}
         })
         .build(app_handle)
@@ -386,8 +361,8 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.listen("model-state-changed", move |_| {
         tray::update_tray_menu(&app_handle_for_listener);
     });
-    // A download or delete can change what the language submenu offers (the
-    // language detector arriving makes Auto usable).
+    // A download or delete can change what the menu shows (the pinned
+    // model arriving flips the first-run panel to the settings surface).
     for event in ["model-download-complete", "model-deleted"] {
         let app_handle_for_listener = app_handle.clone();
         app_handle.listen(event, move |_| {
@@ -401,6 +376,48 @@ fn initialize_core_logic(app_handle: &AppHandle) {
 
     // Create the recording overlay window (hidden by default)
     utils::create_recording_overlay(app_handle);
+}
+
+/// Make sure the pinned model is selected and on disk.
+///
+/// Dictation is pinned to exactly one model and there is no picker, so this
+/// runs at every startup: it re-pins the selection if a store written by an
+/// earlier build (or a Handy-era profile) carries something else, and starts
+/// the automatic first-run download when the model is missing. The settings
+/// window's first-run panel and the footer track the same
+/// `model-download-*` events the download emits.
+fn ensure_pinned_model_available(app_handle: &AppHandle) {
+    let mut settings = settings::get_settings(app_handle);
+    if settings.selected_model != settings::PINNED_MODEL_ID {
+        log::info!(
+            "Re-pinning dictation model to '{}'",
+            settings::PINNED_MODEL_ID
+        );
+        settings.selected_model = settings::PINNED_MODEL_ID.to_string();
+        settings::write_settings(app_handle, settings);
+    }
+
+    let model_manager = app_handle.state::<Arc<ModelManager>>();
+    let pinned = settings::PINNED_MODEL_ID;
+    let is_downloaded = model_manager
+        .get_model_info(pinned)
+        .map(|model| model.is_downloaded)
+        .unwrap_or(false);
+    if is_downloaded {
+        return;
+    }
+
+    log::info!(
+        "Pinned model '{}' is not on disk; starting automatic download",
+        pinned
+    );
+    let manager = model_manager.inner().clone();
+    let model_id = pinned.to_string();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = manager.download_model(&model_id).await {
+            log::error!("Automatic download of '{}' failed: {}", model_id, e);
+        }
+    });
 }
 
 #[tauri::command]
