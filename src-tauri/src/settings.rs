@@ -679,9 +679,27 @@ fn default_typing_tool() -> TypingTool {
 
 pub const SETTINGS_STORE_PATH: &str = "settings_store.json";
 
+/// The Windows dictation default. `ctrl+space` — the inherited default —
+/// toggles the input method in several IMEs (Microsoft Pinyin most notably),
+/// and `alt+space` opens a window's system menu, so the default picks a
+/// combination with no known system or IME binding. On international
+/// layouts `alt gr` is reported as ctrl+alt, but alt gr is only ever held
+/// while typing a character, never with a bare space, so this stays free.
+///
+/// Not cfg-gated: the no-collision test asserts these strings on every
+/// platform, so the choice is verified wherever tests run.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub const WINDOWS_DEFAULT_TRANSCRIBE_BINDING: &str = "ctrl+alt+space";
+
+/// The Windows grounded-binding default: the dictation default plus shift,
+/// with the same collision reasoning (`shift+space` alone switches layouts
+/// in some IMEs, so shift is kept behind the full ctrl+alt chord).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub const WINDOWS_DEFAULT_GROUNDED_BINDING: &str = "ctrl+alt+shift+space";
+
 pub fn get_default_settings() -> AppSettings {
     #[cfg(target_os = "windows")]
-    let default_shortcut = "ctrl+space";
+    let default_shortcut = WINDOWS_DEFAULT_TRANSCRIBE_BINDING;
     #[cfg(target_os = "macos")]
     let default_shortcut = "option+space";
     #[cfg(target_os = "linux")]
@@ -701,7 +719,7 @@ pub fn get_default_settings() -> AppSettings {
         },
     );
     #[cfg(target_os = "windows")]
-    let default_grounded_shortcut = "ctrl+shift+space";
+    let default_grounded_shortcut = WINDOWS_DEFAULT_GROUNDED_BINDING;
     #[cfg(target_os = "macos")]
     let default_grounded_shortcut = "option+shift+space";
     #[cfg(target_os = "linux")]
@@ -1007,6 +1025,38 @@ fn apply_settings_migrations(
             .is_some_and(|value| value > 0);
         if had_positive_legacy_selection {
             settings.transcribe_accelerator = TranscribeAcceleratorSetting::Auto;
+        }
+    }
+
+    // One-time Windows default-shortcut adoption (Phase 4): the pre-Phase-4
+    // defaults `ctrl+space` / `ctrl+shift+space` collide with IME toggles.
+    // A binding whose recorded default is still the old value was never
+    // customized (rebinding only ever writes `current_binding`), so both its
+    // default and its matching current binding move to the safer default;
+    // anything else is a user choice and stays untouched.
+    #[cfg(target_os = "windows")]
+    {
+        for (id, old, new) in [
+            (
+                "transcribe",
+                "ctrl+space",
+                WINDOWS_DEFAULT_TRANSCRIBE_BINDING,
+            ),
+            (
+                "transcribe_grounded",
+                "ctrl+shift+space",
+                WINDOWS_DEFAULT_GROUNDED_BINDING,
+            ),
+        ] {
+            if let Some(binding) = settings.bindings.get_mut(id) {
+                if binding.default_binding == old {
+                    binding.default_binding = new.to_string();
+                    if binding.current_binding == old {
+                        binding.current_binding = new.to_string();
+                    }
+                    updated = true;
+                }
+            }
         }
     }
     if stored_schema_version < 2 {
@@ -1460,6 +1510,51 @@ mod tests {
         assert_eq!(
             defaults.bindings["transcribe_grounded"].current_binding,
             "ctrl+alt+shift+space",
+        );
+    }
+
+    /// Phase 4: the Windows defaults must stay clear of the IME and system
+    /// shortcuts the inherited `ctrl+space` collides with. Runs on every
+    /// platform so the choice is asserted wherever tests run; the strings
+    /// under test are the constants `get_default_settings` reads on Windows.
+    #[test]
+    fn windows_default_shortcuts_avoid_ime_and_system_collisions() {
+        assert_eq!(WINDOWS_DEFAULT_TRANSCRIBE_BINDING, "ctrl+alt+space");
+        assert_eq!(WINDOWS_DEFAULT_GROUNDED_BINDING, "ctrl+alt+shift+space");
+        // The exact collisions being avoided: the inherited dictation pair.
+        assert_ne!(WINDOWS_DEFAULT_TRANSCRIBE_BINDING, "ctrl+space");
+        assert_ne!(WINDOWS_DEFAULT_GROUNDED_BINDING, "ctrl+shift+space");
+        // `alt+space` is a window's system menu, never a dictation default.
+        assert!(!WINDOWS_DEFAULT_TRANSCRIBE_BINDING.starts_with("alt+"));
+        // And the pair itself must not collide with each other.
+        assert_ne!(
+            WINDOWS_DEFAULT_TRANSCRIBE_BINDING,
+            WINDOWS_DEFAULT_GROUNDED_BINDING
+        );
+    }
+
+    /// The exact strings `get_default_settings` binds on Windows — guarded
+    /// so a future rename of the constants can't silently drift from the
+    /// documented defaults.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_defaults_are_the_documented_bindings() {
+        let defaults = get_default_settings();
+        assert_eq!(
+            defaults.bindings["transcribe"].default_binding,
+            WINDOWS_DEFAULT_TRANSCRIBE_BINDING
+        );
+        assert_eq!(
+            defaults.bindings["transcribe"].current_binding,
+            WINDOWS_DEFAULT_TRANSCRIBE_BINDING
+        );
+        assert_eq!(
+            defaults.bindings["transcribe_grounded"].default_binding,
+            WINDOWS_DEFAULT_GROUNDED_BINDING
+        );
+        assert_eq!(
+            defaults.bindings["transcribe_grounded"].current_binding,
+            WINDOWS_DEFAULT_GROUNDED_BINDING
         );
     }
 

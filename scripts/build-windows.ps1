@@ -183,6 +183,15 @@ if ($proc.ExitCode -ne 0 -or -not (Test-Path (Join-Path $portableDir "voicey.exe
 $marker = Join-Path $portableDir "portable"
 if (Test-Path $marker) { Remove-Item -Force $marker }
 
+# Ship the license and third-party notices with the app (the NSIS payload
+# only carries binaries and resources).
+foreach ($doc in @("LICENSE", "NOTICE.md")) {
+    $docPath = Join-Path $StageDir $doc
+    if (Test-Path $docPath) {
+        Copy-Item -Force $docPath (Join-Path $portableDir $doc)
+    }
+}
+
 $distDir = Join-Path $StageDir "dist"
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 $zipPath = Join-Path $distDir "Voicey-portable-$version.zip"

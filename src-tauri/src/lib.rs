@@ -314,28 +314,27 @@ fn initialize_core_logic(app_handle: &AppHandle) {
             "notice" => {
                 show_main_window(app);
             }
-            "check_updates" => {
-                let settings = settings::get_settings(app);
-                if settings::update_checks_effectively_enabled(&settings) {
-                    show_main_window(app);
-                    let _ = app.emit("check-for-updates", ());
-                }
+            "autostart" => {
+                // The tray's one toggle (D9: available, off by default).
+                // The native checkbox has already flipped visually; the
+                // setting is the source of truth and the menu is rebuilt
+                // from it, same as every other tray mutation.
+                let mut settings = settings::get_settings(app);
+                settings.autostart_enabled = !settings.autostart_enabled;
+                let enabled = settings.autostart_enabled;
+                settings::write_settings(app, settings);
+                crate::autostart::apply_autostart(app, enabled);
+                let _ = app.emit(
+                    "settings-changed",
+                    serde_json::json!({
+                        "setting": "autostart_enabled",
+                        "value": enabled
+                    }),
+                );
+                tray::update_tray_menu(app);
             }
             "copy_last_transcript" => {
                 tray::copy_last_transcript(app);
-            }
-            "unload_model" => {
-                let transcription_manager = app.state::<Arc<TranscriptionManager>>();
-                if !transcription_manager.is_model_loaded() {
-                    log::warn!("No model is currently loaded.");
-                    return;
-                }
-                if let Err(e) = transcription_manager.ensure_model_unlocked() {
-                    log::warn!("{}", e);
-                    return;
-                }
-                transcription_manager.request_unload();
-                log::info!("Model unloaded via tray.");
             }
             "cancel" => {
                 use crate::utils::cancel_current_operation;

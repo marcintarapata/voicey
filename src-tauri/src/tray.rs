@@ -21,7 +21,6 @@
 //! icon/menu/tooltip, so those must only ever be set through the applier.
 
 use crate::managers::history::{HistoryEntry, HistoryManager};
-use crate::managers::transcription::TranscriptionManager;
 use crate::notices::{self, NoticeCode};
 use crate::settings;
 use crate::tray_i18n::get_tray_translations;
@@ -31,7 +30,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIcon;
 use tauri::{AppHandle, Manager, Theme};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -56,15 +55,14 @@ impl TrayIconState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MenuInputs {
     busy: bool,
-    /// A background transcription holds the model, so it can't be unloaded.
-    models_locked: bool,
     /// macOS Secure Input is blocking keyboard shortcuts.
     secure_input: bool,
     /// The notice to show as a menu line.
     notice: Option<NoticeCode>,
-    model_loaded: bool,
     locale: String,
-    update_checks_enabled: bool,
+    /// Whether Voicey starts with Windows (the one tray toggle, D9:
+    /// available but off by default).
+    autostart_enabled: bool,
 }
 
 /// Complete description of what the tray should look like.
@@ -233,8 +231,8 @@ pub fn refresh_tray_icon(app: &AppHandle) {
     sync_tray(app);
 }
 
-/// Re-syncs the tray after something the menu depends on changed (model
-/// loaded state, notices, update-check setting).
+/// Re-syncs the tray after something the menu depends on changed (notices,
+/// the autostart toggle).
 pub fn update_tray_menu(app: &AppHandle) {
     sync_tray(app);
 }
@@ -323,20 +321,15 @@ fn compute_desired(app: &AppHandle, icon_state: TrayIconState) -> TrayDesired {
     let secure_input = crate::secure_input::tray_warning_active(app);
     let notice = notices::tray_headline(app);
     let badge = secure_input || notice.is_some();
-    let tm = app.state::<Arc<TranscriptionManager>>();
-    let model_loaded = tm.is_model_loaded();
-    let models_locked = tm.job_active();
 
     TrayDesired {
         icon_path: get_icon_path(theme, icon_state, badge),
         menu: MenuInputs {
             busy: icon_state.is_busy(),
-            models_locked,
             secure_input,
             notice: notice.map(|notice| notice.code),
-            model_loaded,
             locale: settings.app_language,
-            update_checks_enabled: settings.update_checks_enabled,
+            autostart_enabled: settings.autostart_enabled,
         },
     }
 }
@@ -455,9 +448,7 @@ fn version_label() -> String {
 }
 
 /// Builds the tray menu and tooltip for the given inputs. Pure with respect
-/// to app state: everything it depends on is in `inputs`, plus the
-/// process-constant `HANDY_DISABLE_UPDATER` env flag behind
-/// `update_checks_forced_disabled()`, which cannot change during a run.
+/// to app state: everything it depends on is in `inputs`.
 fn build_menu(app: &AppHandle, inputs: &MenuInputs) -> tauri::Result<(Menu<tauri::Wry>, String)> {
     let strings = get_tray_translations(Some(inputs.locale.clone()));
 
@@ -507,11 +498,12 @@ fn build_menu(app: &AppHandle, inputs: &MenuInputs) -> tauri::Result<(Menu<tauri
         true,
         settings_accelerator,
     )?;
-    let check_updates_i = MenuItem::with_id(
+    let autostart_i = CheckMenuItem::with_id(
         app,
-        "check_updates",
-        &strings.check_updates,
-        inputs.update_checks_enabled,
+        "autostart",
+        &strings.start_with_windows,
+        true,
+        inputs.autostart_enabled,
         None::<&str>,
     )?;
     let copy_last_transcript_i = MenuItem::with_id(
@@ -534,48 +526,28 @@ fn build_menu(app: &AppHandle, inputs: &MenuInputs) -> tauri::Result<(Menu<tauri
                 &cancel_i,
                 &separator()?,
                 &copy_last_transcript_i,
+                &autostart_i,
                 &separator()?,
                 &settings_i,
-                &check_updates_i,
                 &separator()?,
                 &quit_i,
             ],
         )?
     } else {
-        let unload_model_i = MenuItem::with_id(
-            app,
-            "unload_model",
-            &strings.unload_model,
-            inputs.model_loaded && !inputs.models_locked,
-            None::<&str>,
-        )?;
-
         Menu::with_items(
             app,
             &[
                 &version_i,
                 &separator()?,
                 &copy_last_transcript_i,
-                &separator()?,
-                &unload_model_i,
+                &autostart_i,
                 &separator()?,
                 &settings_i,
-                &check_updates_i,
                 &separator()?,
                 &quit_i,
             ],
         )?
     };
-
-    // When update checks are forced off (e.g. HANDY_DISABLE_UPDATER, set by
-    // the Nix package), the item is dropped from the menu rather than shown
-    // disabled — it can never do anything in that case, and a disabled item
-    // still shifts every entry below it by one position. A manually-disabled
-    // toggle in Debug Settings keeps the old greyed-out behavior via the
-    // enabled flag.
-    if settings::update_checks_forced_disabled() {
-        menu.remove(&check_updates_i)?;
-    }
 
     // Both layouts start with [version, separator, ...]; slot the warnings in
     // right below the version line so they're the first actionable thing seen.
@@ -697,12 +669,10 @@ mod tests {
     fn inputs(busy: bool) -> MenuInputs {
         MenuInputs {
             busy,
-            models_locked: false,
             secure_input: false,
             notice: None,
-            model_loaded: true,
             locale: "en".to_string(),
-            update_checks_enabled: true,
+            autostart_enabled: false,
         }
     }
 

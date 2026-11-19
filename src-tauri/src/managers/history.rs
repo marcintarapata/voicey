@@ -97,6 +97,19 @@ fn split_language(language: Option<LanguageDecision>) -> (Option<String>, Option
     }
 }
 
+/// Escape LIKE's wildcard characters so a search query matches literally.
+/// SQLite's ESCAPE clause makes the backslash the escape character.
+fn escape_like(query: &str) -> String {
+    let mut escaped = String::with_capacity(query.len());
+    for ch in query.chars() {
+        if matches!(ch, '%' | '_' | '\\') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
+}
+
 impl HistoryManager {
     pub fn new(app_handle: &AppHandle) -> Result<Self> {
         // Create recordings directory in app data dir
@@ -562,13 +575,37 @@ impl HistoryManager {
         Ok(())
     }
 
+    /// Search filter for the history list: a case-insensitive substring
+    /// match over both the verbatim transcript and the grounded rewrite,
+    /// so a query finds what was pasted however the entry was produced.
+    /// `None` (or blank) lists everything, like before.
     pub async fn get_history_entries(
         &self,
         cursor: Option<i64>,
         limit: Option<usize>,
+        search: Option<&str>,
     ) -> Result<PaginatedHistory> {
         let conn = self.get_connection()?;
+        Self::get_history_entries_with_conn(&conn, cursor, limit, search)
+    }
+
+    /// The list query, split out so the search filter is unit-testable
+    /// without an app handle.
+    fn get_history_entries_with_conn(
+        conn: &Connection,
+        cursor: Option<i64>,
+        limit: Option<usize>,
+        search: Option<&str>,
+    ) -> Result<PaginatedHistory> {
         let limit = limit.map(|l| l.min(100));
+
+        // An empty pattern (`%%`) matches every non-null transcript, so the
+        // filter clause stays in every statement unconditionally and the bind
+        // indices stay stable between the paged and unpaginated paths.
+        let pattern = format!(
+            "%{}%",
+            escape_like(search.map(str::trim).unwrap_or_default())
+        );
 
         let mut entries: Vec<HistoryEntry> = match (cursor, limit) {
             (Some(cursor_id), Some(lim)) => {
@@ -577,11 +614,16 @@ impl HistoryManager {
                     "SELECT {ENTRY_COLUMNS}
                      FROM transcription_history
                      WHERE id < ?1
+                       AND (transcription_text LIKE ?2 ESCAPE '\\'
+                            OR post_processed_text LIKE ?2 ESCAPE '\\')
                      ORDER BY id DESC
-                     LIMIT ?2"
+                     LIMIT ?3"
                 ))?;
                 let result = stmt
-                    .query_map(params![cursor_id, fetch_count], Self::map_history_entry)?
+                    .query_map(
+                        params![cursor_id, pattern, fetch_count],
+                        Self::map_history_entry,
+                    )?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 result
             }
@@ -590,11 +632,13 @@ impl HistoryManager {
                 let mut stmt = conn.prepare(&format!(
                     "SELECT {ENTRY_COLUMNS}
                      FROM transcription_history
+                     WHERE (transcription_text LIKE ?1 ESCAPE '\\'
+                            OR post_processed_text LIKE ?1 ESCAPE '\\')
                      ORDER BY id DESC
-                     LIMIT ?1"
+                     LIMIT ?2"
                 ))?;
                 let result = stmt
-                    .query_map(params![fetch_count], Self::map_history_entry)?
+                    .query_map(params![pattern, fetch_count], Self::map_history_entry)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 result
             }
@@ -602,10 +646,12 @@ impl HistoryManager {
                 let mut stmt = conn.prepare(&format!(
                     "SELECT {ENTRY_COLUMNS}
                      FROM transcription_history
+                     WHERE (transcription_text LIKE ?1 ESCAPE '\\'
+                            OR post_processed_text LIKE ?1 ESCAPE '\\')
                      ORDER BY id DESC"
                 ))?;
                 let result = stmt
-                    .query_map([], Self::map_history_entry)?
+                    .query_map(params![pattern], Self::map_history_entry)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 result
             }
@@ -848,6 +894,143 @@ mod tests {
         assert_eq!(entry.language.as_deref(), Some("de"));
         assert_eq!(entry.language_source, Some(LanguageSource::Detected));
         assert_eq!(latest("from_the_future").language_source, None);
+    }
+
+    #[test]
+    fn search_matches_the_verbatim_transcript_case_insensitively() {
+        let conn = setup_conn();
+        insert_entry(&conn, 100, "hello world", None);
+        insert_entry(&conn, 200, "unrelated words", None);
+
+        let page =
+            HistoryManager::get_history_entries_with_conn(&conn, None, Some(10), Some("HELLO WOR"))
+                .expect("search entries");
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(page.entries[0].transcription_text, "hello world");
+    }
+
+    #[test]
+    fn search_matches_the_grounded_rewrite() {
+        let conn = setup_conn();
+        insert_entry(
+            &conn,
+            100,
+            "rename this to that",
+            Some("rename config.rs to settings.rs"),
+        );
+        insert_entry(&conn, 200, "nothing here", None);
+
+        let page = HistoryManager::get_history_entries_with_conn(
+            &conn,
+            None,
+            Some(10),
+            Some("settings.rs"),
+        )
+        .expect("search entries");
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(page.entries[0].timestamp, 100);
+    }
+
+    #[test]
+    fn search_without_a_query_lists_everything() {
+        let conn = setup_conn();
+        insert_entry(&conn, 100, "one", None);
+        insert_entry(&conn, 200, "two", None);
+        insert_entry(&conn, 300, "", None);
+
+        for query in [None, Some(""), Some("   ")] {
+            let page = HistoryManager::get_history_entries_with_conn(&conn, None, Some(10), query)
+                .expect("list entries");
+            assert_eq!(page.entries.len(), 3, "query: {query:?}");
+        }
+    }
+
+    #[test]
+    fn search_treats_like_wildcards_literally() {
+        let conn = setup_conn();
+        insert_entry(&conn, 100, "100% done", None);
+        insert_entry(&conn, 200, "underscored_words", None);
+
+        // A bare `%` is escaped, so it matches only the entry that literally
+        // contains a percent sign — not everything, as a wildcard would.
+        let percent_char =
+            HistoryManager::get_history_entries_with_conn(&conn, None, Some(10), Some("%"))
+                .expect("search entries");
+        assert_eq!(percent_char.entries.len(), 1);
+        assert_eq!(percent_char.entries[0].transcription_text, "100% done");
+
+        let percent_word =
+            HistoryManager::get_history_entries_with_conn(&conn, None, Some(10), Some("100% done"))
+                .expect("search entries");
+        assert_eq!(percent_word.entries.len(), 1);
+        assert_eq!(percent_word.entries[0].transcription_text, "100% done");
+
+        // Same for `_`: as a literal it matches only the underscored entry,
+        // never the plain-text one a one-character wildcard would hit.
+        let underscore_char =
+            HistoryManager::get_history_entries_with_conn(&conn, None, Some(10), Some("_"))
+                .expect("search entries");
+        assert_eq!(underscore_char.entries.len(), 1);
+        assert_eq!(
+            underscore_char.entries[0].transcription_text,
+            "underscored_words"
+        );
+
+        let underscore_word = HistoryManager::get_history_entries_with_conn(
+            &conn,
+            None,
+            Some(10),
+            Some("underscored_words"),
+        )
+        .expect("search entries");
+        assert_eq!(underscore_word.entries.len(), 1);
+    }
+
+    #[test]
+    fn search_paginates_with_a_cursor() {
+        let conn = setup_conn();
+        for i in 0..5 {
+            insert_entry(&conn, i, &format!("match {i}"), None);
+        }
+        // "no match" would *contain* the query; use a real non-match.
+        insert_entry(&conn, 99, "unrelated", None);
+
+        let first =
+            HistoryManager::get_history_entries_with_conn(&conn, None, Some(3), Some("match"))
+                .expect("search entries");
+        assert_eq!(first.entries.len(), 3);
+        assert!(first.has_more);
+
+        let second = HistoryManager::get_history_entries_with_conn(
+            &conn,
+            Some(first.entries[2].id),
+            Some(3),
+            Some("match"),
+        )
+        .expect("search entries");
+        assert_eq!(second.entries.len(), 2);
+        assert!(!second.has_more);
+    }
+
+    #[test]
+    fn search_finds_nothing_and_that_is_fine() {
+        let conn = setup_conn();
+        insert_entry(&conn, 100, "hello", None);
+
+        let page =
+            HistoryManager::get_history_entries_with_conn(&conn, None, Some(10), Some("goodbye"))
+                .expect("search entries");
+        assert!(page.entries.is_empty());
+        assert!(!page.has_more);
+    }
+
+    #[test]
+    fn like_wildcards_are_escaped_for_literal_search() {
+        assert_eq!(escape_like(""), "");
+        assert_eq!(escape_like("plain"), "plain");
+        assert_eq!(escape_like("100%"), "100\\%");
+        assert_eq!(escape_like("a_b"), "a\\_b");
+        assert_eq!(escape_like("back\\slash"), "back\\\\slash");
     }
 
     #[test]

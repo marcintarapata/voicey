@@ -1,9 +1,8 @@
 {
   "tray": {
     "settings": "Settings...",
-    "checkUpdates": "Check for Updates...",
     "copyLastTranscript": "Copy Last Transcript",
-    "unloadModel": "Unload Model",
+    "startWithWindows": "Start with Windows",
     "quit": "Quit",
     "cancel": "Cancel",
     "secureInputWarning": "⚠ Shortcuts blocked by Secure Input"
@@ -423,6 +422,10 @@
     "history": {
       "title": "History",
       "openFolder": "Open Recordings Folder",
+      "searchPlaceholder": "Search history",
+      "noResults": "No transcriptions match \"{{query}}\".",
+      "grounded": "Grounded",
+      "groundedHint": "Resolved against the screen with the local vision model; the verbatim transcript is kept in the entry.",
       "loading": "Loading history...",
       "empty": "No transcriptions yet. Start recording to build your history!",
       "copyToClipboard": "Copy transcription to clipboard",

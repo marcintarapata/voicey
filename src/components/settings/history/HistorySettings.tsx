@@ -14,6 +14,8 @@ import {
   FilePlus,
   FolderOpen,
   RotateCcw,
+  ScanSearch,
+  Search,
   Star,
   Trash2,
   X,
@@ -34,6 +36,7 @@ import {
 import { formatDateTime } from "@/utils/dateFormat";
 import { AudioPlayer, AudioPlayerGroup } from "../../ui/AudioPlayer";
 import { Button } from "../../ui/Button";
+import { Input } from "../../ui/Input";
 import { copyToClipboard } from "./clipboard";
 import {
   pickAndTranscribeFiles,
@@ -132,6 +135,8 @@ export const HistorySettings: React.FC = () => {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasMore, setHasMore] = useState(true);
+  const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const sentinelRef = useRef<HTMLDivElement>(null);
   const entriesRef = useRef<HistoryEntry[]>([]);
   const loadingRef = useRef(false);
@@ -141,39 +146,49 @@ export const HistorySettings: React.FC = () => {
     entriesRef.current = entries;
   }, [entries]);
 
-  const loadPage = useCallback(async (cursor?: number) => {
-    const isFirstPage = cursor === undefined;
-    if (!isFirstPage && loadingRef.current) return;
-    loadingRef.current = true;
+  // Debounce the search so typing doesn't fire a query per keystroke.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query.trim()), 250);
+    return () => clearTimeout(timer);
+  }, [query]);
 
-    if (isFirstPage) setLoading(true);
+  const loadPage = useCallback(
+    async (cursor?: number) => {
+      const isFirstPage = cursor === undefined;
+      if (!isFirstPage && loadingRef.current) return;
+      loadingRef.current = true;
 
-    try {
-      const result = await commands.getHistoryEntries(
-        cursor ?? null,
-        PAGE_SIZE,
-      );
-      if (result.status === "ok") {
-        const { entries: newEntries, has_more } = result.data;
-        setEntries((prev) => {
-          if (isFirstPage) return newEntries;
-          const existingIds = new Set(prev.map((entry) => entry.id));
-          return [
-            ...prev,
-            ...newEntries.filter((entry) => !existingIds.has(entry.id)),
-          ];
-        });
-        setHasMore(has_more);
+      if (isFirstPage) setLoading(true);
+
+      try {
+        const result = await commands.getHistoryEntries(
+          cursor ?? null,
+          PAGE_SIZE,
+          debouncedQuery || null,
+        );
+        if (result.status === "ok") {
+          const { entries: newEntries, has_more } = result.data;
+          setEntries((prev) => {
+            if (isFirstPage) return newEntries;
+            const existingIds = new Set(prev.map((entry) => entry.id));
+            return [
+              ...prev,
+              ...newEntries.filter((entry) => !existingIds.has(entry.id)),
+            ];
+          });
+          setHasMore(has_more);
+        }
+      } catch (error) {
+        console.error("Failed to load history entries:", error);
+      } finally {
+        setLoading(false);
+        loadingRef.current = false;
       }
-    } catch (error) {
-      console.error("Failed to load history entries:", error);
-    } finally {
-      setLoading(false);
-      loadingRef.current = false;
-    }
-  }, []);
+    },
+    [debouncedQuery],
+  );
 
-  // Initial load
+  // Initial load, and a fresh first page whenever the search query settles.
   useEffect(() => {
     loadPage();
   }, [loadPage]);
@@ -314,7 +329,9 @@ export const HistorySettings: React.FC = () => {
   } else if (entries.length === 0 && reads.length === 0) {
     content = (
       <div className="px-4 py-3 text-center text-ink-2">
-        {t("settings.history.empty")}
+        {debouncedQuery
+          ? t("settings.history.noResults", { query: debouncedQuery })
+          : t("settings.history.empty")}
       </div>
     );
   } else {
@@ -331,7 +348,14 @@ export const HistorySettings: React.FC = () => {
                 entry={entry}
                 job={jobs[entry.id]}
                 onToggleSaved={() => toggleSaved(entry.id)}
-                onCopyText={() => copyToClipboard(entry.transcription_text)}
+                // Copy what actually got pasted: the grounded rewrite when
+                // the entry has one, the verbatim transcript otherwise.
+                onCopyText={() =>
+                  copyToClipboard(
+                    entry.post_processed_text?.trim() ||
+                      entry.transcription_text,
+                  )
+                }
                 getAudioUrl={getAudioUrl}
                 deleteAudio={deleteAudioEntry}
                 retryTranscription={commands.retryHistoryEntryTranscription}
@@ -365,6 +389,23 @@ export const HistorySettings: React.FC = () => {
               onClick={openRecordingsFolder}
               label={t("settings.history.openFolder")}
               icon={FolderOpen}
+            />
+          </div>
+        </div>
+        <div className="px-4 pb-1">
+          <div className="relative max-w-md">
+            <Search
+              width={16}
+              height={16}
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-ink-3"
+            />
+            <Input
+              variant="compact"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={t("settings.history.searchPlaceholder")}
+              aria-label={t("settings.history.searchPlaceholder")}
+              className="w-full pl-8 font-normal"
             />
           </div>
         </div>
@@ -411,6 +452,12 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
     if (!retrying) setCancelling(false);
   }, [retrying]);
   const hasTranscription = entry.transcription_text.trim().length > 0;
+  // What actually got pasted: the grounded rewrite when the dictation used
+  // the second binding, the verbatim transcript otherwise. Search, copy and
+  // display all use this text.
+  const groundedTrimmed = entry.post_processed_text?.trim() ?? "";
+  const groundedText = groundedTrimmed.length > 0 ? groundedTrimmed : null;
+  const displayText = groundedText ?? entry.transcription_text;
   // Voicey dictations keep their text only (audio is never written to disk);
   // file-drop entries and pre-Voicey recordings still point at a WAV.
   const hasAudio = entry.file_name.length > 0;
@@ -425,7 +472,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [folded, entry.transcription_text]);
+  }, [folded, displayText]);
 
   const handleLoadAudio = useCallback(
     () => getAudioUrl(entry.file_name),
@@ -472,6 +519,15 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
       <div className="flex justify-between items-center gap-3">
         <div className="flex items-center gap-2 min-w-0">
           <p className="text-sm font-medium shrink-0">{formattedDate}</p>
+          {groundedText && (
+            <span
+              className="flex items-center gap-1 shrink-0 text-tag text-ink-3 border border-line rounded-chip px-1.5 py-0.5"
+              title={t("settings.history.groundedHint")}
+            >
+              <ScanSearch width={11} height={11} />
+              {t("settings.history.grounded")}
+            </span>
+          )}
           {entry.source_name && (
             <span
               className="flex items-center gap-1 min-w-0 text-sm text-ink-3"
@@ -540,12 +596,12 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
       <div className="flex flex-col items-start gap-1 pb-2">
         <p
           ref={textRef}
-          className={`italic text-sm w-full ${
+          className={`text-sm w-full ${
             retrying
-              ? ""
+              ? "italic"
               : hasTranscription
                 ? "text-text select-text cursor-text whitespace-pre-wrap break-words"
-                : "text-ink-3"
+                : "italic text-ink-3"
           }`}
           style={
             retrying
@@ -564,7 +620,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
           {retrying
             ? progressText
             : hasTranscription
-              ? entry.transcription_text
+              ? displayText
               : entry.source_name
                 ? // Cancelled, interrupted by a quit, or failed.
                   t("settings.history.notTranscribed")
