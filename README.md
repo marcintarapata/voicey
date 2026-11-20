@@ -24,6 +24,9 @@ Everything else is a settled default: one dictation model (Parakeet TDT
 0.6B v3) auto-downloaded on first run, voice-activity detection on, text
 pasted exactly as spoken (with a trailing space), the fixed dark theme.
 `Start with Windows` is available from the tray menu and off by default.
+Every one of those defaults lives in `Data/config.toml` (see
+[Configuration](#configuration-datconfigtoml)) — hand-editable, never shown
+as UI.
 
 Voicey is built on [Handy](https://github.com/cjpais/Handy) (MIT, Copyright
 (c) 2025 CJ Pais), reusing its Rust/Tauri backend (transcribe worker, model
@@ -61,6 +64,7 @@ Voicey/
 ├── LICENSE, NOTICE.md
 └── Data/                    # created on first run; everything lives here
     ├── settings_store.json # the two settings (shortcut, microphone)
+    ├── config.toml         # every other default, hand-editable (see below)
     ├── models/              # model files (mirror-fallback downloads, manual drop-ins)
     ├── huggingface/hub/     # first-run model downloads land here
     ├── history.db           # local transcription history (text only — never audio)
@@ -70,6 +74,30 @@ Voicey/
 
 Dictation audio is never written to disk. History keeps text only, and the
 grounded binding keeps the resolved text — never pixels.
+
+## Configuration (`Data/config.toml`)
+
+The app creates this file on first run and never rewrites it — edit it
+freely, then start a new dictation (or restart Voicey) for changes to apply.
+Unknown keys are ignored and absent keys keep the built-in default, so a
+file from an older or newer version still works. A shortcut or microphone
+chosen in Settings always wins; reset it there to hand control back to the
+file.
+
+| Key                      | Default                                 | What it does                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------ | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `overlay.style`          | `"live"`                                | `"live"`: show the transcript as it forms while you speak — the recording pill until the first text lands, then the preview panel. `"minimal"`: the pill only. `"none"`: no overlay.                                                                                                                                                                        |
+| `overlay.position`       | `"bottom"`                              | Where the overlay sits: `"top"` or `"bottom"`.                                                                                                                                                                                                                                                                                                              |
+| `paste.trailing_space`   | `true`                                  | Append a trailing space after pasted text so the cursor lands ready to type.                                                                                                                                                                                                                                                                                |
+| `paste.delay_ms`         | `60`                                    | Milliseconds to wait after the shortcut before the paste key fires.                                                                                                                                                                                                                                                                                         |
+| `paste.restore_delay_ms` | `60` (Linux: `500`)                     | Milliseconds to wait after pasting before your previous clipboard content is restored.                                                                                                                                                                                                                                                                      |
+| `paste.auto_submit`      | `false`                                 | Press Enter after pasting (e.g. to send the message you dictated).                                                                                                                                                                                                                                                                                          |
+| `vad.enabled`            | `true`                                  | Drop silence from recordings.                                                                                                                                                                                                                                                                                                                               |
+| `vad.chunking`           | `true`                                  | Cut long dictation at pauses and decode each chunk while you keep speaking — what lets the live preview show text mid-speech.                                                                                                                                                                                                                               |
+| `binding.dictation`      | `"ctrl+alt+space"` (per-platform)       | The default dictation shortcut. A shortcut changed in Settings wins.                                                                                                                                                                                                                                                                                        |
+| `binding.grounded`       | `"ctrl+alt+shift+space"` (per-platform) | The default grounded-dictation shortcut, same precedence rule.                                                                                                                                                                                                                                                                                              |
+| `audio.microphone`       | `"default"`                             | The default microphone: `"default"` (the system one) or a device name as shown in Settings. A microphone chosen in Settings wins.                                                                                                                                                                                                                           |
+| `dev.grounding_trace`    | `true`                                  | **Dev builds only.** Record one trace folder per grounded dictation under `Data/logs/grounding/`: `screenshot.png`, and `trace.json` with the raw transcript, the exact vision-model prompt, the model's extracted reading, and the final pasted output. Release builds compile the capture code out entirely and cannot write one whatever this file says. |
 
 ## Development
 

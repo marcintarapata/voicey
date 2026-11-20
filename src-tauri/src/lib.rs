@@ -7,6 +7,8 @@ mod chinese_script;
 pub mod cli;
 mod clipboard;
 mod commands;
+pub mod config_file;
+mod dev_trace;
 pub mod engine_supervisor;
 mod helpers;
 mod input;

@@ -6,8 +6,8 @@ use std::time::Instant;
 use log::info;
 use transcribe_cpp::Transcript;
 
-use super::{RunSetup, TranscriptionManager};
-use crate::audio_toolkit::chunking::Chunker;
+use super::{emit_stream_text, RunSetup, TranscriptionManager};
+use crate::audio_toolkit::chunking::{join_transcripts, Chunker};
 use crate::engine_supervisor::{CancelMark, EngineError, LoadedInfo};
 use crate::language_detection::Plan;
 use crate::managers::audio::create_detector;
@@ -54,6 +54,25 @@ pub(super) struct ChunkedDecode<'a> {
     /// The first run that failed or was cancelled; nothing more is decoded
     /// after it.
     failure: Option<EngineError>,
+    /// Live recordings only: emit the decoded-so-far text to the overlay as
+    /// each chunk lands, so the preview panel can show the transcript while
+    /// the recording continues. Batch clip decodes stay quiet — there is no
+    /// overlay to receive them.
+    emit_live_text: bool,
+}
+
+/// The decoded chunks' text joined the way the final result joins them, so
+/// the live preview matches what the dictation will paste.
+fn joined_text(transcripts: &[Transcript]) -> String {
+    if transcripts.len() == 1 {
+        return transcripts[0].text.clone();
+    }
+    join_transcripts(
+        &transcripts
+            .iter()
+            .map(|t| t.text.as_str())
+            .collect::<Vec<_>>(),
+    )
 }
 
 impl<'a> ChunkedDecode<'a> {
@@ -63,6 +82,29 @@ impl<'a> ChunkedDecode<'a> {
         setup: ChunkSetup,
         model_id: &str,
         backend: VadBackend,
+    ) -> Self {
+        Self::new_with(tm, mark, setup, model_id, backend, false)
+    }
+
+    /// A live-recording chunked decode: like [`Self::new`], but every decoded
+    /// chunk's accumulated text is emitted to the overlay as it lands.
+    pub(super) fn new_live(
+        tm: &'a TranscriptionManager,
+        mark: CancelMark,
+        setup: ChunkSetup,
+        model_id: &str,
+        backend: VadBackend,
+    ) -> Self {
+        Self::new_with(tm, mark, setup, model_id, backend, true)
+    }
+
+    fn new_with(
+        tm: &'a TranscriptionManager,
+        mark: CancelMark,
+        setup: ChunkSetup,
+        model_id: &str,
+        backend: VadBackend,
+        emit_live_text: bool,
     ) -> Self {
         // The VAD is only loaded if the audio turns out long enough to cut.
         let app_handle = tm.app_handle.clone();
@@ -74,6 +116,7 @@ impl<'a> ChunkedDecode<'a> {
             chunker: Chunker::new(Box::new(move || create_detector(backend, &app_handle))),
             transcripts: Vec::new(),
             failure: None,
+            emit_live_text,
         }
     }
 
@@ -156,6 +199,13 @@ impl<'a> ChunkedDecode<'a> {
             {
                 Ok(transcript) => {
                     self.transcripts.push(transcript);
+                    // The live preview: everything decoded so far, committed.
+                    // A chunk's text never changes after this, so this is
+                    // exactly the `committed` half of a stream's preview.
+                    if self.emit_live_text {
+                        let text = joined_text(&self.transcripts);
+                        emit_stream_text(&self.tm.app_handle, &text, "");
+                    }
                     // Real-time factor: audio seconds decoded per second of
                     // wall clock. Floored so a near-instant decode reports a
                     // large factor instead of infinity.

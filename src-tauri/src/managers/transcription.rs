@@ -23,7 +23,7 @@ use anyhow::Result;
 use chunked::{ChunkSetup, ChunkedDecode};
 use live::LiveSession;
 use log::{debug, error, info, warn};
-use policy::{batch_decode, live_decode, BatchDecode, ModelTraits};
+use policy::{batch_decode, live_decode, voicey_model_traits, BatchDecode, ModelTraits};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -887,7 +887,7 @@ impl TranscriptionManager {
             caps.languages,
         );
         let mode = live_decode(
-            ModelTraits::of(&info),
+            voicey_model_traits(&model_id, &info),
             get_settings(&self.app_handle).long_form_chunking,
         );
         let Some(mut session) = LiveSession::begin(self, mode, &info, &model_id) else {

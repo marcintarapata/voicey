@@ -352,17 +352,21 @@ impl ShortcutAction for TranscribeAction {
             streaming: model_supports_streaming,
             long_form: false,
         };
-        if live_decode(expected_model, settings.long_form_chunking) != LiveDecode::None {
+        let live_decode_mode = live_decode(expected_model, settings.long_form_chunking);
+        if live_decode_mode != LiveDecode::None {
             tm.start_stream();
         }
         let plan_elapsed = plan_started.elapsed();
 
-        // Sizing the overlay follows the same advertised capability. A model that
-        // doesn't stream (or whose capability is not known yet) gets the compact
-        // pill instead of an oversized transparent live window.
+        // Sizing the overlay follows the same plan: any live decode (a stream,
+        // or long-form chunks decoded while speaking) can put text on the
+        // overlay, so the Live style gets the streaming overlay; without one,
+        // the compact pill is sized honestly instead of an oversized
+        // transparent window that never shows text.
+        let live_preview = live_decode_mode != LiveDecode::None;
         let overlay_started = Instant::now();
         match settings.overlay_style {
-            OverlayStyle::Live if model_supports_streaming => utils::show_streaming_overlay(app),
+            OverlayStyle::Live if live_preview => utils::show_streaming_overlay(app),
             OverlayStyle::Live | OverlayStyle::Minimal => show_recording_overlay(app),
             OverlayStyle::None => {} // show_overlay_state no-ops on None anyway
         }
@@ -523,6 +527,11 @@ impl ShortcutAction for TranscribeAction {
                 None
             };
 
+            // Dev builds only (D10): record this grounded dictation for
+            // study — the screenshot here, the prompts and outputs below.
+            // Release builds carry an inert stub; nothing is ever written.
+            let mut dev_trace = crate::dev_trace::GroundingTrace::start(grounded, frame.as_ref());
+
             let stop_recording_time = Instant::now();
             if let Some(samples) = rm.stop_recording(&binding_id, cancel_generation) {
                 // Read now: by the time transcribing ends, another take may
@@ -582,6 +591,7 @@ impl ShortcutAction for TranscribeAction {
                                 } else {
                                     show_grounding_overlay(&ah);
                                 }
+                                dev_trace.record_request(&transcription);
                                 let outcome = match frame.as_ref() {
                                     // Capture already failed at release; say
                                     // so now, once there is something to paste.
@@ -632,13 +642,19 @@ impl ShortcutAction for TranscribeAction {
                             // notice that replaces the overlay after the paste.
                             let (final_text, grounded_text, grounding_failed) = match &grounding {
                                 Some(GroundingOutcome::Done(grounded)) => {
+                                    dev_trace.record_reading(grounded);
                                     (grounded.clone(), Some(grounded.clone()), false)
                                 }
                                 Some(GroundingOutcome::Failed) => {
+                                    dev_trace.record_reading_failed();
                                     (transcription.clone(), None, true)
                                 }
                                 None => (transcription.clone(), None, false),
                             };
+
+                            // What the dictation actually pastes closes the
+                            // dev trace; Drop writes the record out.
+                            dev_trace.record_final_output(&final_text);
 
                             // Save the transcript to history. Voicey keeps no
                             // audio, so the entry has no recording to point at;

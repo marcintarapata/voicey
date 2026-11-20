@@ -123,11 +123,11 @@ Handy is a cross-platform desktop speech-to-text application built with Tauri 2.
 
 ### Settings System
 
-Settings are stored using Tauri's store plugin with reactive updates. Voicey's settings surface is exactly two controls; everything else is a settled default with no UI:
+Settings are stored using Tauri's store plugin with reactive updates. Voicey's settings surface is exactly two controls; everything else is a settled default with no UI, carried in the hand-editable `Data/config.toml` (created on first run, documented in the README):
 
 - Keyboard shortcut (the dictation binding; activation is fixed to hold-or-toggle, Escape cancels)
 - Audio device (microphone selection)
-- Dictation model is pinned to Parakeet (auto-downloaded, no picker); VAD, chunking, overlay style, paste behavior, theme, and output are fixed defaults
+- Dictation model is pinned to Parakeet (auto-downloaded, no picker); the config file carries overlay behavior, VAD/chunking flags, paste details, the default shortcuts/microphone, and the dev-build grounding-trace switch; theme and output stay fixed defaults
 
 ### Single Instance Architecture
 

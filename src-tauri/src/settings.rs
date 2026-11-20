@@ -556,9 +556,10 @@ fn default_overlay_position() -> OverlayPosition {
 }
 
 fn default_overlay_style() -> OverlayStyle {
-    // Voicey always shows the minimal pill; the live overlay and the Linux
-    // hide-by-default exception were Handy-era choices.
-    OverlayStyle::Minimal
+    // Live is the settled default: the recording pill until the first text
+    // lands, then the transcript preview while speaking. The config file can
+    // set "minimal" or "none" instead.
+    OverlayStyle::Live
 }
 
 fn default_vad_enabled() -> bool {
@@ -846,7 +847,7 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
 
     // Settings reads also persist one-time migrations. Migration helpers are
     // idempotent, so this converges after the first read of an older store.
-    let settings = if let Some(settings_value) = store.get("settings") {
+    let mut settings = if let Some(settings_value) = store.get("settings") {
         let (mut settings, mut updated) =
             match serde_json::from_value::<AppSettings>(settings_value.clone()) {
                 Ok(settings) => (settings, false),
@@ -879,6 +880,13 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
         store.set("settings", serde_json::to_value(&default_settings).unwrap());
         default_settings
     };
+
+    // The config file (`Data/config.toml`) carries the opinion-shaped
+    // defaults; its present keys override both the compiled defaults and
+    // any stale store snapshot of them. The two UI-owned choices (a
+    // shortcut or microphone actually changed in Settings) keep winning.
+    let config = crate::config_file::load_or_create();
+    crate::config_file::apply_to(&mut settings, &config);
 
     settings
 }
@@ -1236,7 +1244,11 @@ pub fn update_checks_effectively_enabled(settings: &AppSettings) -> bool {
     settings.update_checks_enabled && !update_checks_forced_disabled()
 }
 
-pub fn write_settings(app: &AppHandle, settings: AppSettings) {
+pub fn write_settings(app: &AppHandle, mut settings: AppSettings) {
+    // The store must never record a config-file default as if the user chose
+    // it in Settings; reads re-apply the config on top of the compiled
+    // defaults, so stripping converges back to the file's value.
+    crate::config_file::strip_config_owned(&mut settings);
     let store = app
         .store(crate::portable::store_path(SETTINGS_STORE_PATH))
         .expect("Failed to initialize store");
@@ -1632,7 +1644,7 @@ mod tests {
         assert!(settings.vad_enabled);
         assert!(settings.long_form_chunking);
         assert!(settings.append_trailing_space);
-        assert_eq!(settings.overlay_style, OverlayStyle::Minimal);
+        assert_eq!(settings.overlay_style, OverlayStyle::Live);
         assert!(!settings.auto_submit);
     }
 

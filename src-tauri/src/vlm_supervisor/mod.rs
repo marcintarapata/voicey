@@ -35,13 +35,21 @@ mod supervisor;
     all(target_os = "windows", target_arch = "x86_64"),
     target_os = "linux"
 ))]
-mod worker;
+// pub(crate): the dev-only grounding-trace integration test (dev_trace)
+// drives the real in-process load/ground path; nothing outside the crate
+// can reach it.
+pub(crate) mod worker;
 
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
     target_os = "linux"
 ))]
 pub use protocol::GroundOptions;
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    target_os = "linux"
+))]
+pub use protocol::{grounding_user_message, GROUNDING_SYSTEM_PROMPT, MEDIA_MARKER};
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
     target_os = "linux"

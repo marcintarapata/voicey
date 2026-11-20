@@ -424,7 +424,10 @@ const RecordingOverlay: React.FC = () => {
                     : transcribingLabel,
                   true,
                 )
-              : listeningRow(open, true)}
+              : // The collapsed pill is the same one the compact overlay
+                // shows, timer included; open, the panel keeps the timer in
+                // its bottom row.
+                listeningRow(true, true)}
         </div>
       </div>
     );

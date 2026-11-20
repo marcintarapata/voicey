@@ -54,7 +54,8 @@ struct Incoming {
 
 /// The loaded vision model, kept alive between requests. The backend lives
 /// for the process's whole life (created once in [`run`]).
-struct Loaded {
+/// pub(crate): see [`load`] — the dev trace's integration test passes it on.
+pub(crate) struct Loaded {
     backend: &'static LlamaBackend,
     model: LlamaModel,
     projection: MtmdContext,
@@ -297,7 +298,9 @@ fn init_logger() {
 }
 
 /// Load the language model and its multimodal projection.
-fn load(
+/// pub(crate): the dev-only grounding-trace integration test drives this
+/// in-process path exactly as the worker loop does.
+pub(crate) fn load(
     backend: &'static LlamaBackend,
     model_path: &Path,
     mmproj_path: &Path,
@@ -350,7 +353,8 @@ fn worker_threads() -> i32 {
 
 /// Ground one transcript against one frame: encode the frame, prefill the
 /// chat, and generate the rewritten transcript.
-fn ground(
+/// pub(crate): as `load` above — the dev trace's integration test only.
+pub(crate) fn ground(
     state: &mut Loaded,
     sampler: &mut LlamaSampler,
     options: &GroundOptions,

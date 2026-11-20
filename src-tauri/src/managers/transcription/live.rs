@@ -61,7 +61,7 @@ impl<'a> LiveSession<'a> {
             LiveDecode::Chunked => {
                 info!("Live long-form chunking started (model '{}')", model_id);
                 let backend = settings.vad_backend;
-                LiveDecoder::Chunked(Box::new(ChunkedDecode::new(
+                LiveDecoder::Chunked(Box::new(ChunkedDecode::new_live(
                     tm,
                     tm.engine.cancel_mark(),
                     ChunkSetup::Pending(Box::new(PendingSetup {
@@ -74,6 +74,10 @@ impl<'a> LiveSession<'a> {
                 )))
             }
         };
+        // A live decode is in flight for both decoders: the stop path keeps
+        // the streaming overlay (text panel) instead of collapsing to the
+        // compact pill while the final chunk finishes.
+        tm.stream_active.store(true, Ordering::Release);
         Some(Self { decoder })
     }
 
@@ -201,7 +205,6 @@ impl<'a> StreamSession<'a> {
             }
         };
 
-        tm.stream_active.store(true, Ordering::Release);
         info!(
             "Live streaming transcription started (model '{}', backend '{}')",
             model_id, info.backend
