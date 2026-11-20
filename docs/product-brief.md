@@ -7,8 +7,7 @@ question below.
 ## Base project
 
 - **Handy** (MIT License, Copyright (c) 2025 CJ Pais): offline speech-to-text
-  desktop app. Local reference clone: `/mnt/c/Users/marci/dev/Handy`
-  (upstream: https://github.com/cjpais/Handy).
+  desktop app. Upstream: https://github.com/cjpais/Handy.
 - Observed stack (to be verified in depth during examination): Tauri 2 (Rust
   backend), Vite + TypeScript + Tailwind frontend, Silero VAD, Whisper and
   Parakeet V3 transcription models, model downloads managed via the

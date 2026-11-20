@@ -10,9 +10,9 @@
 # Usage: scripts/winbuild.sh [--stage <windows-dir>] [--smoke]
 #
 # Primary output: Voicey-portable-<version>.zip — the single-folder portable
-# build (unzip anywhere, run, no admin rights). Copied to
-# /home/marcin/firstmate/data/voicey-phase2/artifacts (and left in the Windows
-# stage's dist dir); the exact paths are printed.
+# build (unzip anywhere, run, no admin rights). Copied to a local artifacts
+# directory (default: ~/voicey-artifacts, overridable via VOICEY_ARTIFACTS_OUT)
+# and left in the Windows stage's dist dir; the exact paths are printed.
 
 set -euo pipefail
 
@@ -88,9 +88,9 @@ win_part="${STAGE#*:}"        # "\Users\...\voicey-build"
 stage_wsl="/mnt/c${win_part//\\//}"
 dist_wsl="$stage_wsl/dist"
 if [ -d "$dist_wsl" ]; then
-  # Task-specific proof location; overridable so other phases/lanes can keep
-  # their artifacts separate.
-  out_dir="${VOICEY_ARTIFACTS_OUT:-/home/marcin/firstmate/data/voicey-phase2/artifacts}"
+  # Local artifacts directory; overridable so separate builds can keep
+  # their artifacts apart.
+  out_dir="${VOICEY_ARTIFACTS_OUT:-$HOME/voicey-artifacts}"
   mkdir -p "$out_dir"
   cp -v "$dist_wsl"/* "$out_dir"/ 2>/dev/null || true
   echo "== Artifacts copied to $out_dir"
