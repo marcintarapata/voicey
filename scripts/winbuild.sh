@@ -10,9 +10,14 @@
 # Usage: scripts/winbuild.sh [--stage <windows-dir>] [--smoke]
 #
 # Primary output: Voicey-portable-<version>.zip — the single-folder portable
-# build (unzip anywhere, run, no admin rights). Copied to a local artifacts
-# directory (default: ~/voicey-artifacts, overridable via VOICEY_ARTIFACTS_OUT)
-# and left in the Windows stage's dist dir; the exact paths are printed.
+# release build (unzip anywhere, run, no admin rights; capture-inert by
+# construction). The same run also produces the DEV flavor,
+# Voicey-dev-portable-<version>.zip — a debug-profile build carrying the
+# compiled-in grounding-trace capability, in its own Voicey-dev top-level
+# folder with a DEV-BUILD.txt marker (see the README's dev/debug section).
+# Both are copied to a local artifacts directory (default:
+# ~/voicey-artifacts, overridable via VOICEY_ARTIFACTS_OUT) and left in the
+# Windows stage's artifacts dir; the exact paths are printed.
 
 set -euo pipefail
 
@@ -86,13 +91,15 @@ echo "== Windows build exited with $build_rc"
 # report still gets mirrored for the record).
 win_part="${STAGE#*:}"        # "\Users\...\voicey-build"
 stage_wsl="/mnt/c${win_part//\\//}"
-dist_wsl="$stage_wsl/dist"
+dist_wsl="$stage_wsl/artifacts"   # NOT the stage's dist/ (the frontend
+                                   # build output, which vite empties on
+                                   # every rebuild)
 if [ -d "$dist_wsl" ]; then
   # Local artifacts directory; overridable so separate builds can keep
   # their artifacts apart.
   out_dir="${VOICEY_ARTIFACTS_OUT:-$HOME/voicey-artifacts}"
   mkdir -p "$out_dir"
-  cp -v "$dist_wsl"/* "$out_dir"/ 2>/dev/null || true
+  cp -rv "$dist_wsl"/* "$out_dir"/ 2>/dev/null || true
   echo "== Artifacts copied to $out_dir"
   ls -la "$out_dir"
 fi

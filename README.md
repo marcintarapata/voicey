@@ -137,5 +137,39 @@ bun run tauri dev
 ```
 
 Building the Windows app from WSL: `scripts/winbuild.sh [--smoke]` stages the
-checkout to a Windows temp dir through explicit WSL interop, builds it
-there, and copies the artifacts back.
+checkout to a Windows temp dir through explicit WSL interop, builds both
+flavors there in one run, and copies the artifacts back:
+
+- **`Voicey-portable-<version>.zip`** — the production build (release
+  profile). The one to run day to day. Capture-inert by construction: the
+  grounding-trace module is compiled into inert stubs, so a release binary
+  cannot write a trace no matter what its config file says.
+- **`Voicey-dev-portable-<version>.zip`** — the dev build (debug profile),
+  for studying the grounded binding on real use. Carries the compiled-in
+  grounding-trace capability.
+
+The dev zip unpacks to its own `Voicey-dev-<version>` folder and ships a
+`DEV-BUILD.txt`; the app itself is distinguishable at a glance too — its
+tray tooltip reads `Voicey v<version> (Dev)` and it opens with a console
+window. The release zip has neither marker. Because the dev zip carries
+its own top-level folder, the two flavors cannot be unzipped over each
+other by accident.
+
+### The dev grounding trace
+
+The trace is how real-use data about the enhanced (vision-grounded) mode
+gets collected — on the dev build only:
+
+1. Unzip the dev zip, run `Voicey.exe` once (it creates `Data/`), then set
+   `dev.grounding_trace = true` in `Data/config.toml` — inside the **dev
+   build's own** `Data` folder. The key is on by default; see the
+   [configuration table](#configuration-datconfigtoml) for the full entry.
+2. Use the grounded binding as usual.
+3. Each grounded dictation writes one session folder under
+   `Data/logs/grounding/`: `screenshot.png` plus `trace.json` (the raw
+   transcript, the exact vision-model prompt, the model's extracted
+   reading, and the final pasted output).
+
+The reminder that goes with it: this capability exists **only in the dev
+build by construction** — release builds compile the capture module out
+entirely and cannot capture anything, whatever their config says.
