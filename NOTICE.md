@@ -8,8 +8,9 @@ by, the app, with the license that covers each.
 ## AI models
 
 Models are never bundled inside the app package except where noted; the two
-dictation models are downloaded on first run into `Data/models` next to the
-executable (see the README). Every file is fetched from its pinned source
+dictation models are downloaded on first run into the app's `Data/` folder
+(the hf-hub cache under `Data/huggingface/hub/`) next to the executable (see
+the README). Every file is fetched from its pinned source
 repository and verified against a recorded SHA-256 before use.
 
 | Model                                                                                                                                                          | License    | Source                                                                                                                                                         |

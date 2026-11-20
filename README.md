@@ -34,6 +34,31 @@ manager, paste transaction, overlays, history) with a rebranded, stripped-down
 frontend. Third-party and model licenses: [NOTICE.md](NOTICE.md). Product
 direction: [docs/product-brief.md](docs/product-brief.md).
 
+## Enterprise-friendly: local, and staying that way
+
+Voicey is built for environments where data must not leave the machine.
+
+- **Zero telemetry.** No analytics, no crash reporting, no accounts, no
+  phone-home of any kind. There is no telemetry code to turn off — the app
+  simply has none.
+- **No external services — ever.** Transcription and screen grounding run
+  local models on your own hardware; there is no API-key option anywhere in
+  the product, because there is no code path that could use one. The only
+  network activity in Voicey's life is the one-time first-run model download
+  (straight from Hugging Face, verified against a recorded SHA-256). After
+  that, the machine can be offline forever.
+- **Screen frames live in memory only.** The grounded binding captures one
+  frame at release, resolves the reference, pastes the text, and drops the
+  pixels. Frames are never written to disk. The dev-only capture switch
+  (`dev.grounding_trace`) is compiled out of release builds entirely — a
+  release binary cannot write a trace no matter what the config file says.
+- **Everything in one folder.** Models, settings, and history live in `Data/`
+  beside the executable (portable layout). Delete the folder and Voicey is
+  gone; back it up and you have everything.
+- **This is a design commitment, not a setting.** The defaults described
+  below cannot drift toward the cloud, because the code that would have to
+  drift isn't there.
+
 ## Install (portable zip)
 
 1. Unzip `Voicey-portable-<version>.zip` anywhere — no admin rights needed.
