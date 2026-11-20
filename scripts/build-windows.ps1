@@ -5,7 +5,7 @@
 # Probes the toolchain first: if a prerequisite is missing it prints the exact
 # missing list and the install command, and exits without attempting a build.
 #
-# Outputs (copied into <StageDir>\dist):
+# Outputs (copied into <StageDir>\artifacts):
 #   - Voicey-portable-<version>.zip   (PRIMARY: release build, portable folder; unzip anywhere,
 #                                      run Voicey.exe, no admin rights. Capture-inert by
 #                                      construction: the grounding-trace module is compiled
@@ -200,18 +200,22 @@ foreach ($doc in @("LICENSE", "NOTICE.md")) {
     }
 }
 
-$distDir = Join-Path $StageDir "dist"
-New-Item -ItemType Directory -Force -Path $distDir | Out-Null
-$zipPath = Join-Path $distDir "Voicey-portable-$version.zip"
+$artifactsDir = Join-Path $StageDir "artifacts"
+# NOT the frontend dist (\dist): tauri's beforeBuildCommand rebuilds it and
+# vite empties it, which would delete any artifact staged there mid-run
+# (the dev flavor's frontend rebuild wiped the release zip until this got
+# its own directory).
+New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
+$zipPath = Join-Path $artifactsDir "Voicey-portable-$version.zip"
 if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
 Compress-Archive -Path (Join-Path $portableDir "*") -DestinationPath $zipPath
-Copy-Item -Force $nsisExe.FullName (Join-Path $distDir "Voicey_$($version)_x64-setup.exe")
-Copy-Item -Force $releaseExe (Join-Path $distDir "voicey.exe")
+Copy-Item -Force $nsisExe.FullName (Join-Path $artifactsDir "Voicey_$($version)_x64-setup.exe")
+Copy-Item -Force $releaseExe (Join-Path $artifactsDir "voicey.exe")
 
 Write-Output "VOICEY-BUILD: artifacts"
 Write-Output "  PRIMARY portable zip: $zipPath"
-Write-Output "  installer:               $(Join-Path $distDir "Voicey_$($version)_x64-setup.exe")"
-Write-Output "  binary:                  $(Join-Path $distDir "voicey.exe")"
+Write-Output "  installer:               $(Join-Path $artifactsDir "Voicey_$($version)_x64-setup.exe")"
+Write-Output "  binary:                  $(Join-Path $artifactsDir "voicey.exe")"
 
 # ---------------------------------------------------------------------------
 # 4. Dev build: a debug-profile Windows build with the compiled-in
@@ -283,14 +287,14 @@ $devReadme | Set-Content -Path (Join-Path $portableDevDir "DEV-BUILD.txt") -Enco
 
 # The dev zip carries its own top-level folder (the release zip is flat),
 # so the two flavors cannot be unzipped over each other by accident.
-$devZipPath = Join-Path $distDir "Voicey-dev-portable-$version.zip"
+$devZipPath = Join-Path $artifactsDir "Voicey-dev-portable-$version.zip"
 if (Test-Path $devZipPath) { Remove-Item -Force $devZipPath }
 Compress-Archive -Path $portableDevDir -DestinationPath $devZipPath
-Copy-Item -Force $debugExe (Join-Path $distDir "voicey-dev.exe")
+Copy-Item -Force $debugExe (Join-Path $artifactsDir "voicey-dev.exe")
 
 Write-Output "VOICEY-BUILD: artifacts (dev flavor)"
 Write-Output "  DEV portable zip:        $devZipPath"
-Write-Output "  dev binary:              $(Join-Path $distDir "voicey-dev.exe")"
+Write-Output "  dev binary:              $(Join-Path $artifactsDir "voicey-dev.exe")"
 
 # ---------------------------------------------------------------------------
 # 5. Optional smoke run: launch each portable flavor, reveal the window by
@@ -328,7 +332,7 @@ function Test-ExeContains([string]$ExePath, [string]$Needle) {
 if ($Smoke) {
     Add-Type -AssemblyName System.Drawing
     Add-Type -AssemblyName System.Windows.Forms
-    $shotDir = Join-Path $distDir "smoke"
+    $shotDir = Join-Path $artifactsDir "smoke"
     New-Item -ItemType Directory -Force -Path $shotDir | Out-Null
 
     # Compile-time privacy rule, checked on the shipped binaries: the trace

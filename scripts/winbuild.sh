@@ -17,7 +17,7 @@
 # folder with a DEV-BUILD.txt marker (see the README's dev/debug section).
 # Both are copied to a local artifacts directory (default:
 # ~/voicey-artifacts, overridable via VOICEY_ARTIFACTS_OUT) and left in the
-# Windows stage's dist dir; the exact paths are printed.
+# Windows stage's artifacts dir; the exact paths are printed.
 
 set -euo pipefail
 
@@ -91,7 +91,9 @@ echo "== Windows build exited with $build_rc"
 # report still gets mirrored for the record).
 win_part="${STAGE#*:}"        # "\Users\...\voicey-build"
 stage_wsl="/mnt/c${win_part//\\//}"
-dist_wsl="$stage_wsl/dist"
+dist_wsl="$stage_wsl/artifacts"   # NOT the stage's dist/ (the frontend
+                                   # build output, which vite empties on
+                                   # every rebuild)
 if [ -d "$dist_wsl" ]; then
   # Local artifacts directory; overridable so separate builds can keep
   # their artifacts apart.
