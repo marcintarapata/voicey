@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use log::info;
+use log::{info, warn};
 use transcribe_cpp::Transcript;
 
 use super::{emit_stream_text, RunSetup, TranscriptionManager};
@@ -13,11 +13,53 @@ use crate::language_detection::Plan;
 use crate::managers::audio::create_detector;
 use crate::settings::{AppSettings, VadBackend};
 
+const RATE: usize = 16_000;
+
 /// How a chunked decode's runs are set up: known up front (a whole clip), or
 /// once the first chunk's audio can pick the language (a live recording).
 pub(super) enum ChunkSetup {
     Ready(Box<RunSetup>),
     Pending(Box<PendingSetup>),
+}
+
+/// When the live preview re-decodes the tail it is showing. The pinned
+/// dictation model decodes offline (no engine streaming), so the preview is
+/// refreshed by re-running it over the audio that is not yet committed to a
+/// chunk; the pacer keeps that to a natural cadence instead of once per
+/// microphone frame.
+#[derive(Debug)]
+pub(crate) struct PreviewPacer {
+    /// New audio that must arrive between two preview re-decodes, in samples.
+    interval_samples: usize,
+    /// The shortest tail worth re-decoding: below it a run costs more than
+    /// the text it could add. In samples.
+    floor_samples: usize,
+    /// Total samples at the last preview (or the recording's start).
+    last_preview: usize,
+}
+
+impl PreviewPacer {
+    /// `interval_ms` is [`AppSettings::live_preview_interval_ms`] (the
+    /// config file's `[overlay] preview_interval_ms`).
+    pub(crate) fn new(interval_ms: u64) -> Self {
+        Self {
+            interval_samples: interval_ms as usize * RATE / 1000,
+            floor_samples: RATE,
+            last_preview: 0,
+        }
+    }
+
+    /// Whether the tail, of `tail_samples`, should be re-decoded now that the
+    /// recording holds `samples` in total.
+    pub(crate) fn is_due(&self, samples: usize, tail_samples: usize) -> bool {
+        tail_samples >= self.floor_samples && samples - self.last_preview >= self.interval_samples
+    }
+
+    /// Records that a preview ran at `samples`; the next one is due an
+    /// interval later.
+    pub(crate) fn mark(&mut self, samples: usize) {
+        self.last_preview = samples;
+    }
 }
 
 /// What a chunked decode's setup is resolved from.
@@ -59,6 +101,12 @@ pub(super) struct ChunkedDecode<'a> {
     /// the recording continues. Batch clip decodes stay quiet — there is no
     /// overlay to receive them.
     emit_live_text: bool,
+    /// Live recordings only: when the not-yet-committed tail is due a rolling
+    /// preview re-decode.
+    pacer: PreviewPacer,
+    /// A preview re-decode failed with something other than a cancel: no more
+    /// are attempted (the real decode reports the failure if it persists).
+    preview_broken: bool,
 }
 
 /// The decoded chunks' text joined the way the final result joins them, so
@@ -83,19 +131,39 @@ impl<'a> ChunkedDecode<'a> {
         model_id: &str,
         backend: VadBackend,
     ) -> Self {
-        Self::new_with(tm, mark, setup, model_id, backend, false)
+        // A batch clip emits nothing live, so its pacer never fires.
+        Self::new_with(
+            tm,
+            mark,
+            setup,
+            model_id,
+            backend,
+            false,
+            PreviewPacer::new(0),
+        )
     }
 
     /// A live-recording chunked decode: like [`Self::new`], but every decoded
-    /// chunk's accumulated text is emitted to the overlay as it lands.
+    /// chunk's accumulated text is emitted to the overlay as it lands — and
+    /// the growing tail is re-decoded on `preview_interval_ms` so the preview
+    /// updates mid-speech even when no chunk is cut yet.
     pub(super) fn new_live(
         tm: &'a TranscriptionManager,
         mark: CancelMark,
         setup: ChunkSetup,
         model_id: &str,
         backend: VadBackend,
+        preview_interval_ms: u64,
     ) -> Self {
-        Self::new_with(tm, mark, setup, model_id, backend, true)
+        Self::new_with(
+            tm,
+            mark,
+            setup,
+            model_id,
+            backend,
+            true,
+            PreviewPacer::new(preview_interval_ms),
+        )
     }
 
     fn new_with(
@@ -105,6 +173,7 @@ impl<'a> ChunkedDecode<'a> {
         model_id: &str,
         backend: VadBackend,
         emit_live_text: bool,
+        pacer: PreviewPacer,
     ) -> Self {
         // The VAD is only loaded if the audio turns out long enough to cut.
         let app_handle = tm.app_handle.clone();
@@ -117,6 +186,8 @@ impl<'a> ChunkedDecode<'a> {
             transcripts: Vec::new(),
             failure: None,
             emit_live_text,
+            pacer,
+            preview_broken: false,
         }
     }
 
@@ -157,6 +228,7 @@ impl<'a> ChunkedDecode<'a> {
         }
         let chunks = self.chunker.push(pcm);
         self.decode(chunks);
+        self.preview_tail();
     }
 
     /// Decodes what is left. Every chunk's transcript in order and the setup
@@ -224,5 +296,102 @@ impl<'a> ChunkedDecode<'a> {
                 }
             }
         }
+    }
+
+    /// The live preview while speech is still going: re-decode the audio that
+    /// is not yet committed to a chunk and emit it as tentative text on top
+    /// of the committed chunks. Best-effort — the pasted result comes only
+    /// from the chunks (and the batch decode at stop), never from here.
+    fn preview_tail(&mut self) {
+        if !self.emit_live_text || self.preview_broken || self.failure.is_some() {
+            return;
+        }
+        let samples = self.chunker.samples();
+        let tail = self.chunker.tail();
+        if !self.pacer.is_due(samples, tail.len()) {
+            return;
+        }
+        // The same setup the eventual chunk decode runs with: the first
+        // resolution (it may hear the language from this audio) sticks.
+        let run_options = self.setup.resolve(self.tm, tail).run_options.clone();
+        match self
+            .tm
+            .run_batch(self.mark, tail.to_vec(), &run_options, &self.model_id)
+        {
+            Ok(transcript) => {
+                self.pacer.mark(self.chunker.samples());
+                let committed = joined_text(&self.transcripts);
+                emit_stream_text(&self.tm.app_handle, &committed, &transcript.text);
+            }
+            // The session is being torn down; the cancel path reports it.
+            Err(EngineError::Cancelled) => {}
+            Err(e) => {
+                warn!("Live preview re-decode failed ({}); pausing previews", e);
+                self.preview_broken = true;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PreviewPacer;
+
+    const RATE: usize = 16_000;
+
+    fn samples(secs: usize) -> usize {
+        secs * RATE
+    }
+
+    /// The regression pin for the live preview: the pinned dictation model
+    /// decodes offline, so with no chunk cut (nothing is cut under 45 s of
+    /// audio — the whole tail stays pending) the preview must refresh by
+    /// re-decoding the growing tail on the configured cadence. Before the
+    /// rolling re-decode, 10 s of continuous speech produced no preview at
+    /// all until the recording stopped.
+    #[test]
+    fn ongoing_speech_re_decodes_the_tail_on_the_configured_cadence() {
+        let mut pacer = PreviewPacer::new(2000);
+        let mut previews = Vec::new();
+        // 10 s of ongoing speech arriving in 100 ms recorder frames, none
+        // of it ever committed to a chunk: the tail is the whole recording.
+        for frame in 1..=100 {
+            let at = frame * RATE / 10;
+            if pacer.is_due(at, at) {
+                previews.push(at);
+                pacer.mark(at);
+            }
+        }
+        // A preview every 2 s of speech, the first at the 2 s mark.
+        let timeline = previews
+            .iter()
+            .map(|at| format!("{:.1}s", *at as f64 / RATE as f64))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("live preview timeline over 10 s of ongoing speech: {timeline}");
+        assert_eq!(
+            previews,
+            vec![samples(2), samples(4), samples(6), samples(8), samples(10)]
+        );
+    }
+
+    /// A tail that just reached the floor decodes at the next cadence tick;
+    /// a shorter one waits for more speech rather than spending a run on it.
+    #[test]
+    fn a_tail_shorter_than_the_floor_waits_for_more_speech() {
+        let pacer = PreviewPacer::new(2000);
+        assert!(!pacer.is_due(samples(5), RATE / 2));
+        assert!(pacer.is_due(samples(5), RATE));
+    }
+
+    /// A cadence from the config file reaches the pacer: a shorter interval
+    /// means more frequent previews, none before its first tick.
+    #[test]
+    fn the_interval_comes_from_the_config() {
+        let pacer = PreviewPacer::new(500);
+        let tick = RATE / 2; // 500 ms of audio
+        let tail = RATE; // a full second of speech: past the floor
+        assert!(!pacer.is_due(tick - 1, tail));
+        assert!(pacer.is_due(tick, tail));
     }
 }

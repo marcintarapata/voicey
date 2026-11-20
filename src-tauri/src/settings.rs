@@ -492,6 +492,13 @@ pub struct AppSettings {
     /// `overlay_position` (position `none` → style `None`).
     #[serde(default = "default_overlay_style")]
     pub overlay_style: OverlayStyle,
+    /// How often, in milliseconds, the live preview re-decodes the audio that
+    /// is not yet committed to a chunk, so text appears while speech is still
+    /// going — the pinned dictation model decodes offline, so its preview is
+    /// refreshed by re-running it over the growing tail. Owned by the config
+    /// file (`[overlay] preview_interval_ms`); there is no Settings surface.
+    #[serde(default = "default_live_preview_interval_ms")]
+    pub live_preview_interval_ms: u64,
 }
 
 fn default_model() -> String {
@@ -568,6 +575,14 @@ fn default_vad_enabled() -> bool {
 
 fn default_long_form_chunking() -> bool {
     true
+}
+
+/// A preview every 2 s of new audio: text lands within a couple of seconds of
+/// the words being spoken, and each re-decode stays cheap on the tail it
+/// re-runs. The engine worker is a separate process, so a decode in flight
+/// never blocks the microphone.
+fn default_live_preview_interval_ms() -> u64 {
+    2000
 }
 
 fn default_language_detection_window_secs() -> u32 {
@@ -810,6 +825,7 @@ pub fn get_default_settings() -> AppSettings {
         language_detection: LanguageDetectionMode::default(),
         language_detection_window_secs: default_language_detection_window_secs(),
         overlay_style: default_overlay_style(),
+        live_preview_interval_ms: default_live_preview_interval_ms(),
     }
 }
 

@@ -61,6 +61,7 @@ impl<'a> LiveSession<'a> {
             LiveDecode::Chunked => {
                 info!("Live long-form chunking started (model '{}')", model_id);
                 let backend = settings.vad_backend;
+                let preview_interval_ms = settings.live_preview_interval_ms;
                 LiveDecoder::Chunked(Box::new(ChunkedDecode::new_live(
                     tm,
                     tm.engine.cancel_mark(),
@@ -71,6 +72,7 @@ impl<'a> LiveSession<'a> {
                     })),
                     model_id,
                     backend,
+                    preview_interval_ms,
                 )))
             }
         };

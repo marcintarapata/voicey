@@ -393,9 +393,9 @@ mod imp {
             .expect("load the pinned vision model");
             let options =
                 crate::vlm_supervisor::GroundOptions::new(width, height, transcript.to_string());
-            let mut sampler = llama_cpp_2::sampling::LlamaSampler::chain_simple(
-                [llama_cpp_2::sampling::LlamaSampler::greedy()],
-            );
+            let mut sampler = llama_cpp_2::sampling::LlamaSampler::chain_simple([
+                llama_cpp_2::sampling::LlamaSampler::greedy(),
+            ]);
             let grounded =
                 crate::vlm_supervisor::worker::ground(&mut loaded, &mut sampler, &options, &rgba)
                     .expect("ground the transcript against the frame");
