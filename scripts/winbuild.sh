@@ -99,7 +99,7 @@ if [ -d "$dist_wsl" ]; then
   # their artifacts apart.
   out_dir="${VOICEY_ARTIFACTS_OUT:-$HOME/voicey-artifacts}"
   mkdir -p "$out_dir"
-  cp -v "$dist_wsl"/* "$out_dir"/ 2>/dev/null || true
+  cp -rv "$dist_wsl"/* "$out_dir"/ 2>/dev/null || true
   echo "== Artifacts copied to $out_dir"
   ls -la "$out_dir"
 fi
