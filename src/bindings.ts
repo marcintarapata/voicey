@@ -1108,7 +1108,15 @@ language_detection_window_secs?: number;
  * not gated on this — that follows model capability. Migrated from the old
  * `overlay_position` (position `none` → style `None`).
  */
-overlay_style?: OverlayStyle }
+overlay_style?: OverlayStyle; 
+/**
+ * How often, in milliseconds, the live preview re-decodes the audio that
+ * is not yet committed to a chunk, so text appears while speech is still
+ * going — the pinned dictation model decodes offline, so its preview is
+ * refreshed by re-running it over the growing tail. Owned by the config
+ * file (`[overlay] preview_interval_ms`); there is no Settings surface.
+ */
+live_preview_interval_ms?: number }
 export type AudioDevice = { index: string; name: string; is_default: boolean }
 export type AutoSubmitKey = "enter" | "ctrl_enter" | "cmd_enter"
 export type AutoUnavailableReason = 

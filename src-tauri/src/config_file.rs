@@ -57,6 +57,10 @@ pub struct OverlayConfig {
     pub style: Option<settings::OverlayStyle>,
     /// `"top"` or `"bottom"`.
     pub position: Option<settings::OverlayPosition>,
+    /// How often, in milliseconds, the live preview re-decodes the audio that
+    /// is not yet committed to a chunk, so text appears while speech is still
+    /// going. Lower is snappier but spends more CPU re-running the model.
+    pub preview_interval_ms: Option<u64>,
 }
 
 /// How dictated text is delivered to the focused app.
@@ -162,6 +166,9 @@ pub fn apply_to(settings: &mut AppSettings, config: &VoiceyConfig) {
     }
     if let Some(position) = config.overlay.position {
         settings.overlay_position = position;
+    }
+    if let Some(interval) = config.overlay.preview_interval_ms {
+        settings.live_preview_interval_ms = interval;
     }
     if let Some(trailing_space) = config.paste.trailing_space {
         settings.append_trailing_space = trailing_space;
@@ -303,6 +310,10 @@ fn default_file_contents() -> String {
 style = "live"
 # Where the overlay sits.
 position = "bottom"
+# How often (milliseconds) the live preview re-decodes what you have said
+# so far, so text keeps appearing while you speak. Lower is snappier but
+# spends more CPU re-running the model.
+preview_interval_ms = {preview_interval}
 
 [paste]
 # Append a trailing space after pasted text so the cursor lands ready to type.
@@ -342,6 +353,7 @@ grounding_trace = true
 "#,
         paste_delay = defaults.paste_delay_ms,
         paste_restore_delay = defaults.paste_delay_after_ms,
+        preview_interval = defaults.live_preview_interval_ms,
         dictation = dictation,
         grounded = grounded,
     )
@@ -359,6 +371,10 @@ mod tests {
         let contents = default_file_contents();
         let config: VoiceyConfig = toml::from_str(&contents).expect("default file parses");
         assert_eq!(config.overlay.style, Some(OverlayStyle::Live));
+        assert_eq!(
+            config.overlay.preview_interval_ms,
+            Some(crate::settings::get_default_settings().live_preview_interval_ms)
+        );
         assert_eq!(config.paste.trailing_space, Some(true));
         assert_eq!(config.vad.enabled, Some(true));
         assert_eq!(config.vad.chunking, Some(true));
@@ -396,6 +412,7 @@ mod tests {
             [overlay]
             style = "none"
             position = "top"
+            preview_interval_ms = 500
             [paste]
             trailing_space = false
             delay_ms = 120
@@ -412,6 +429,7 @@ mod tests {
         apply_to(&mut settings, &config);
         assert_eq!(settings.overlay_style, OverlayStyle::None);
         assert_eq!(settings.overlay_position, settings::OverlayPosition::Top);
+        assert_eq!(settings.live_preview_interval_ms, 500);
         assert!(!settings.append_trailing_space);
         assert_eq!(settings.paste_delay_ms, 120);
         assert_eq!(settings.paste_delay_after_ms, 130);

@@ -217,6 +217,14 @@ impl Chunker {
         self.len
     }
 
+    /// The audio not yet in a chunk: everything after the last cut (or from
+    /// the start, when nothing is cut yet). The live preview decodes it
+    /// rolling while the recording continues; the chunks themselves are cut
+    /// exactly as before.
+    pub fn tail(&self) -> &[f32] {
+        &self.pending
+    }
+
     /// Adds audio. Returns the chunks whose cuts this made certain, in order.
     /// A whole clip pushed at once is moved in, not copied.
     pub fn push(&mut self, pcm: impl Into<Vec<f32>>) -> Vec<Vec<f32>> {
@@ -612,5 +620,34 @@ mod tests {
         chunks.extend(chunker.finish());
         assert_eq!(cuts(&chunks), vec![29.5]);
         assert_eq!(chunks.concat(), pcm, "no audio lost");
+    }
+
+    /// The live preview re-decodes what the chunker has not committed yet:
+    /// `tail()` must be exactly the audio after the last cut, shrinking as
+    /// chunks land and holding the whole clip while nothing is cut.
+    #[test]
+    fn tail_holds_the_audio_not_yet_in_a_chunk() {
+        // Short enough that no chunk is ever cut: the tail is everything.
+        let short = clip(&probs_with_pauses(30.0, &[(14.0, 15.0)]));
+        let (mut short_chunker, _) = chunker();
+        for piece in short.chunks(FRAME * 3 + 7) {
+            assert!(short_chunker.push(piece).is_empty());
+            assert_eq!(
+                short_chunker.tail(),
+                &short[..short_chunker.samples()],
+                "nothing committed"
+            );
+        }
+
+        // Long enough for one live cut at the 29-30 s pause's midpoint.
+        let pcm = clip(&probs_with_pauses(50.0, &[(29.0, 30.0)]));
+        let (mut long, _) = chunker();
+        let mut chunks = Vec::new();
+        for piece in pcm.chunks(FRAME * 3 + 7) {
+            chunks.extend(long.push(piece));
+        }
+        assert_eq!(chunks.len(), 1);
+        let cut = chunks.concat().len();
+        assert_eq!(long.tail(), &pcm[cut..], "the tail starts at the cut");
     }
 }
